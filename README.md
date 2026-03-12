@@ -62,3 +62,7 @@ Release workflow details are in [`RELEASING.md`](RELEASING.md).
 ## License
 
 MIT. See [LICENSE](LICENSE).
+
+## Star History
+
+[![Star History Chart](https://api.star-history.com/svg?repos=voc0der/OneButtonMount&type=Date)](https://star-history.com/#voc0der/OneButtonMount&Date)
