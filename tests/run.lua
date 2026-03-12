@@ -41,6 +41,8 @@ local function setup_env(opts)
         real_zone_text = opts.real_zone_text,
         zone_text = opts.zone_text,
         c_map_enabled = opts.c_map_enabled ~= false,
+        num_companions_mode = opts.num_companions_mode,
+        num_companions_value = opts.num_companions_value,
     }
 
     _G.unpack = table.unpack
@@ -186,6 +188,12 @@ local function setup_env(opts)
     _G.IsIndoors = function() return state.indoors end
     _G.IsInInstance = function() return state.in_instance, "none" end
     _G.GetNumCompanions = function()
+        if state.num_companions_mode == "nil" then
+            return nil
+        end
+        if state.num_companions_value ~= nil then
+            return state.num_companions_value
+        end
         return #state.mounts
     end
     _G.GetCompanionInfo = function(_, index)
@@ -382,6 +390,22 @@ run_test("non-flying mounts cannot be added to flying rotation", function()
         end
     end
     assert_true(found_message, "expected rejection message was not printed")
+end)
+
+run_test("nil companion count on addon load does not crash", function()
+    local state = setup_env({
+        mounts = {
+            { spellID = 6001, name = "Backup Mount", mountType = 0x01 },
+        },
+        num_companions_mode = "nil",
+        db = {
+            groundMounts = { 6001 },
+            flyingMounts = {},
+        },
+    })
+
+    assert_true(type(state.chat) == "table", "addon should finish loading without runtime error")
+    assert_equal(#OneButtonMountDB.groundMounts, 1, "existing pool should remain intact when count is nil")
 end)
 
 print(string.format("Ran %d tests, %d failures", total, failures))

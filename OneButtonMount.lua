@@ -120,7 +120,15 @@ end
 
 local function ScanMounts()
     allMounts = {}
-    local count = GetNumCompanions("MOUNT")
+    if not GetNumCompanions or not GetCompanionInfo then
+        return
+    end
+
+    local count = tonumber(GetNumCompanions("MOUNT")) or 0
+    if count < 1 then
+        return
+    end
+
     for i = 1, count do
         local creatureID, creatureName, creatureSpellID, icon, isSummoned, mountType = GetCompanionInfo("MOUNT", i)
         if creatureSpellID then
