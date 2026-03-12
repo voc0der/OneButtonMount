@@ -1,0 +1,8 @@
+## Interface: 20504
+## Title: OneButtonMount
+## Notes: One button to summon a random mount from your rotation. Separate ground and flying pools with smart zone detection.
+## Author: voc0der
+## Version: 1.0.0
+## SavedVariables: OneButtonMountDB
+
+OneButtonMount.lua
