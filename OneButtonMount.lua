@@ -544,8 +544,7 @@ end
 local bindingFrame = CreateFrame("Button", "OneButtonMountBindingButton", UIParent, "SecureActionButtonTemplate")
 bindingFrame:SetSize(1, 1)
 bindingFrame:SetPoint("CENTER")
-bindingFrame:Hide()
-bindingFrame:RegisterForClicks("AnyUp")
+bindingFrame:RegisterForClicks("AnyDown", "AnyUp")
 bindingFrame:SetAttribute("type", "macro")
 
 local function NormalizeMouseBindingToken(button)
@@ -573,11 +572,11 @@ local function SetMountKeybind(key)
 
     -- Clear old keybind
     if OneButtonMountDB.keybind then
-        SetOverrideBinding(bindingFrame, false, OneButtonMountDB.keybind, nil)
+        SetOverrideBinding(bindingFrame, true, OneButtonMountDB.keybind, nil)
     end
 
     if key then
-        SetOverrideBindingClick(bindingFrame, false, key, "OneButtonMountBindingButton")
+        SetOverrideBindingClick(bindingFrame, true, key, "OneButtonMountBindingButton", "LeftButton")
         OneButtonMountDB.keybind = key
         Print("Mount key bound to: " .. key)
     else
@@ -631,7 +630,7 @@ end)
 local function RestoreKeybind()
     if InCombatLockdown() then return end
     if OneButtonMountDB and OneButtonMountDB.keybind then
-        SetOverrideBindingClick(bindingFrame, false, OneButtonMountDB.keybind, "OneButtonMountBindingButton")
+        SetOverrideBindingClick(bindingFrame, true, OneButtonMountDB.keybind, "OneButtonMountBindingButton", "LeftButton")
     end
 end
 

@@ -268,8 +268,13 @@ local function setup_env(opts)
     _G.IsSpellKnown = function(spell_id)
         return state.known_spells[spell_id] or false
     end
-    _G.SetOverrideBindingClick = function(_, _, key, button_name)
-        state.binding_clicks[#state.binding_clicks + 1] = { key = key, button_name = button_name }
+    _G.SetOverrideBindingClick = function(_, is_priority, key, button_name, mouse_button)
+        state.binding_clicks[#state.binding_clicks + 1] = {
+            key = key,
+            button_name = button_name,
+            is_priority = is_priority,
+            mouse_button = mouse_button,
+        }
     end
     _G.SetOverrideBinding = function(_, _, key, command)
         state.binding_clears[#state.binding_clears + 1] = { key = key, command = command }
@@ -488,6 +493,8 @@ run_test("right mouse keybind maps to BUTTON2 token", function()
     local last_binding = state.binding_clicks[#state.binding_clicks]
     assert_true(last_binding ~= nil, "no binding call recorded")
     assert_equal(last_binding.key, "BUTTON2", "right-click bind token should be BUTTON2")
+    assert_equal(last_binding.is_priority, true, "binding override should use priority")
+    assert_equal(last_binding.mouse_button, "LeftButton", "binding click should target left button explicitly")
 end)
 
 run_test("shift plus button5 keybind is captured as SHIFT-BUTTON5", function()
@@ -515,6 +522,34 @@ run_test("shift plus button5 keybind is captured as SHIFT-BUTTON5", function()
     local last_binding = state.binding_clicks[#state.binding_clicks]
     assert_true(last_binding ~= nil, "no binding call recorded")
     assert_equal(last_binding.key, "SHIFT-BUTTON5", "shift+button5 should be stored as SHIFT-BUTTON5")
+    assert_equal(last_binding.is_priority, true, "binding override should use priority")
+    assert_equal(last_binding.mouse_button, "LeftButton", "binding click should target left button explicitly")
+end)
+
+run_test("binding button accepts key down and key up clicks", function()
+    setup_env({
+        mounts = {
+            { spellID = 4103, name = "Test Mount", mountType = 0x01 },
+        },
+        db = {},
+    })
+
+    local binding_button = _G.OneButtonMountBindingButton
+    assert_true(binding_button ~= nil, "binding button not created")
+    assert_true(type(binding_button.clicks) == "table", "binding button click registration missing")
+
+    local has_any_down = false
+    local has_any_up = false
+    for _, token in ipairs(binding_button.clicks) do
+        if token == "AnyDown" then
+            has_any_down = true
+        elseif token == "AnyUp" then
+            has_any_up = true
+        end
+    end
+
+    assert_true(has_any_down, "binding button should register AnyDown")
+    assert_true(has_any_up, "binding button should register AnyUp")
 end)
 
 run_test("shift plus button5 keybind is captured via mouse down fallback", function()

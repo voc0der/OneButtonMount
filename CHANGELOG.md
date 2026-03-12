@@ -1,5 +1,12 @@
 ## [Unreleased]
 
+## [1.0.6] - 2026-03-12
+
+### Fixed
+- Updated secure bind button registration to support both key-down and key-up click modes
+- Switched override binding application to priority mode with explicit `LeftButton` click target for better mouse-chord reliability
+- Added regression tests for down/up binding registration and override binding parameters
+
 ## [1.0.5] - 2026-03-12
 
 ### Fixed
