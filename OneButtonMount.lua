@@ -124,7 +124,8 @@ local function ScanMounts()
         return
     end
 
-    local count = tonumber(GetNumCompanions("MOUNT")) or 0
+    local rawCount = GetNumCompanions("MOUNT")
+    local count = tonumber(rawCount) or 0
     if count < 1 then
         return
     end

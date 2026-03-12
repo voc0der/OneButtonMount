@@ -1,5 +1,11 @@
 ## [Unreleased]
 
+## [1.0.2] - 2026-03-12
+
+### Fixed
+- Handle `GetNumCompanions("MOUNT")` calls that return zero values during early load
+- Prevent `tonumber` startup crash by normalizing companion count via a local variable first
+
 ## [1.0.1] - 2026-03-12
 
 ### Added

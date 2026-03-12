@@ -191,6 +191,9 @@ local function setup_env(opts)
         if state.num_companions_mode == "nil" then
             return nil
         end
+        if state.num_companions_mode == "no_values" then
+            return
+        end
         if state.num_companions_value ~= nil then
             return state.num_companions_value
         end
@@ -406,6 +409,22 @@ run_test("nil companion count on addon load does not crash", function()
 
     assert_true(type(state.chat) == "table", "addon should finish loading without runtime error")
     assert_equal(#OneButtonMountDB.groundMounts, 1, "existing pool should remain intact when count is nil")
+end)
+
+run_test("empty-return companion count on addon load does not crash", function()
+    local state = setup_env({
+        mounts = {
+            { spellID = 7001, name = "Backup Mount", mountType = 0x01 },
+        },
+        num_companions_mode = "no_values",
+        db = {
+            groundMounts = { 7001 },
+            flyingMounts = {},
+        },
+    })
+
+    assert_true(type(state.chat) == "table", "addon should finish loading without runtime error")
+    assert_equal(#OneButtonMountDB.groundMounts, 1, "existing pool should remain intact when count has no return values")
 end)
 
 print(string.format("Ran %d tests, %d failures", total, failures))
