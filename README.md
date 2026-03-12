@@ -1,8 +1,14 @@
-# OneButtonMount
+<p align="center">
+  <img src="assets/onebuttonmount-icon.png" alt="OneButtonMount icon" width="180" />
+</p>
 
-OneButtonMount is a World of Warcraft addon for TBC Anniversary Classic that summons a random mount from your configured rotation with one click or keybind.
+<h1 align="center">OneButtonMount</h1>
 
-Current version: `1.0.8`
+<p align="center">
+  TBC Anniversary Classic random-mount addon with smart pool rules and reliable keybind chords.
+</p>
+
+<p align="center"><strong>Current version:</strong> <code>1.0.8</code></p>
 
 ## Scope
 

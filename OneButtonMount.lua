@@ -895,12 +895,14 @@ local function CreateMountIcon(parent, mountData, pool, index)
     local tex = btn:CreateTexture(nil, "ARTWORK")
     tex:SetAllPoints()
     tex:SetTexture(mountData.icon)
+    -- Crop Blizzard icon edges to avoid the inner-square artifact on mount icons.
+    tex:SetTexCoord(0.08, 0.92, 0.08, 0.92)
     btn.iconTexture = tex
 
     local border = btn:CreateTexture(nil, "OVERLAY")
-    border:SetTexture("Interface\\Buttons\\UI-ActionButton-Border")
-    border:SetBlendMode("ADD")
-    border:SetAlpha(0.6)
+    border:SetTexture("Interface\\Buttons\\UI-Quickslot2")
+    border:SetBlendMode("BLEND")
+    border:SetAlpha(0.9)
     border:SetAllPoints()
 
     btn:SetHighlightTexture("Interface\\Buttons\\ButtonHilight-Square", "ADD")
