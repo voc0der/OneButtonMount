@@ -37,6 +37,12 @@ jobs:
           echo "version=$v" >> "$GITHUB_OUTPUT"
           echo "tag=v$v" >> "$GITHUB_OUTPUT"
 
+      - name: Fetch tags
+        shell: bash
+        run: |
+          set -euo pipefail
+          git fetch --tags --force origin
+
       - name: Check if tag already exists
         id: exists
         shell: bash
@@ -57,3 +63,10 @@ jobs:
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git tag -a "${{ steps.ver.outputs.tag }}" -m "${{ steps.ver.outputs.tag }}"
           git push origin "${{ steps.ver.outputs.tag }}"
+
+      - name: Explain skip when tag already exists
+        if: steps.exists.outputs.exists == 'true'
+        shell: bash
+        run: |
+          echo "Tag ${{ steps.ver.outputs.tag }} already exists."
+          echo "Bump ## Version in OneButtonMount.toc before pushing to main."

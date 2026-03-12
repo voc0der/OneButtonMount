@@ -1,5 +1,17 @@
 ## [Unreleased]
 
+## [1.0.1] - 2026-03-12
+
+### Added
+- Local regression test coverage for mount scan and keybind edge cases
+
+### Fixed
+- Prevent startup error when `GetNumCompanions("MOUNT")` returns nil
+- Sanitize saved mount pools to remove stale or invalid mount spell IDs
+- Normalize mouse keybind tokens (for example `RightButton` -> `BUTTON2`)
+- Add flying detection fallbacks when map APIs are unavailable
+- Prevent ground-only mounts from being added to the flying rotation pool
+
 ## [1.0.0] - 2026-03-12
 
 ### Added
