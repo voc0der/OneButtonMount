@@ -1,5 +1,13 @@
 ## [Unreleased]
 
+## [1.0.3] - 2026-03-12
+
+### Fixed
+- Added `C_MountJournal` mount scanning fallback so mount lists populate on clients where companion APIs are empty
+- Added `C_MountJournal.SummonByID` summon path for journal-backed mounts
+- Improved keybind capture overlay to reliably capture mouse chords such as `SHIFT-BUTTON5`
+- Kept flying pool validation only when mount flying capability can be confidently determined
+
 ## [1.0.2] - 2026-03-12
 
 ### Fixed

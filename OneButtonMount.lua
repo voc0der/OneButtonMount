@@ -50,7 +50,7 @@ local MOUNT_TYPE_FLAG_FLYING = 0x02
 
 local configFrame = nil
 local minimapButton = nil
-local allMounts = {}        -- { spellID, name, icon, isFlying, index }
+local allMounts = {}        -- { spellID, name, icon, isFlying, canDetermineFlying, index, journalID }
 
 -- ============================================================================
 -- Utility
@@ -120,6 +120,45 @@ end
 
 local function ScanMounts()
     allMounts = {}
+
+    -- Preferred on newer clients where companion APIs can be absent or empty.
+    if C_MountJournal and C_MountJournal.GetMountIDs and C_MountJournal.GetMountInfoByID then
+        local mountIDs = C_MountJournal.GetMountIDs()
+        if mountIDs then
+            for _, mountID in pairs(mountIDs) do
+                local name, spellID, icon, isActive, isUsable, sourceType, isFavorite, isFactionSpecific, faction, shouldHideOnChar, isCollected = C_MountJournal.GetMountInfoByID(mountID)
+                if spellID and (isCollected == nil or isCollected) then
+                    local isFlying = true
+                    local canDetermineFlying = false
+
+                    if C_MountJournal.GetMountInfoExtraByID and Enum and Enum.MountType and Enum.MountType.Flying then
+                        local _, _, _, _, mountTypeID = C_MountJournal.GetMountInfoExtraByID(mountID)
+                        if mountTypeID ~= nil then
+                            canDetermineFlying = true
+                            isFlying = mountTypeID == Enum.MountType.Flying
+                        end
+                    end
+
+                    table.insert(allMounts, {
+                        spellID = spellID,
+                        name = name,
+                        icon = icon,
+                        isFlying = isFlying,
+                        canDetermineFlying = canDetermineFlying,
+                        index = nil,
+                        journalID = mountID,
+                    })
+                end
+            end
+
+            if #allMounts > 0 then
+                table.sort(allMounts, function(a, b) return (a.name or "") < (b.name or "") end)
+                return
+            end
+        end
+    end
+
+    -- Legacy fallback for older clients.
     if not GetNumCompanions or not GetCompanionInfo then
         return
     end
@@ -133,7 +172,6 @@ local function ScanMounts()
     for i = 1, count do
         local creatureID, creatureName, creatureSpellID, icon, isSummoned, mountType = GetCompanionInfo("MOUNT", i)
         if creatureSpellID then
-            -- Use mountType bitmask to detect flying capability
             local isFlying = false
             if mountType and mountType > 0 then
                 isFlying = bit.band(mountType, MOUNT_TYPE_FLAG_FLYING) > 0
@@ -143,10 +181,13 @@ local function ScanMounts()
                 name = creatureName,
                 icon = icon,
                 isFlying = isFlying,
+                canDetermineFlying = true,
                 index = i,
+                journalID = nil,
             })
         end
     end
+
     table.sort(allMounts, function(a, b) return (a.name or "") < (b.name or "") end)
 end
 
@@ -242,7 +283,7 @@ local function SanitizePool(pool, requireFlying, mountLookup)
 
     for _, spellID in ipairs(pool) do
         local mount = mountLookup[spellID]
-        if mount and (not requireFlying or mount.isFlying) and not seen[spellID] then
+        if mount and (not requireFlying or not mount.canDetermineFlying or mount.isFlying) and not seen[spellID] then
             table.insert(cleaned, spellID)
             seen[spellID] = true
         end
@@ -308,7 +349,13 @@ local function SummonRandomMount()
     local mount = GetMountBySpellID(spellID)
 
     if mount then
-        CallCompanion("MOUNT", mount.index)
+        if mount.journalID and C_MountJournal and C_MountJournal.SummonByID then
+            C_MountJournal.SummonByID(mount.journalID)
+        elseif mount.index and CallCompanion then
+            CallCompanion("MOUNT", mount.index)
+        else
+            CastSpellByID(spellID)
+        end
     else
         -- Mount may have been removed from companion list, try spell
         CastSpellByID(spellID)
@@ -580,7 +627,7 @@ local function CreateMountIcon(parent, mountData, pool, index)
                     table.insert(OneButtonMountDB.groundMounts, self.mountData.spellID)
                 end
             elseif button == "RightButton" then
-                if not self.mountData.isFlying then
+                if self.mountData.canDetermineFlying and not self.mountData.isFlying then
                     Print((self.mountData.name or "This mount") .. " cannot be added to flying rotation.")
                     return
                 end
@@ -679,13 +726,35 @@ function OneButtonMount:CreateConfigUI()
     keybindClearBtn:SetText("Clear")
     ApplyElvUISkin(keybindClearBtn, "button")
 
-    -- Invisible frame to capture key input when binding
-    local keyCaptureFrame = CreateFrame("Frame", nil, configFrame)
+    -- Invisible overlay button to capture keyboard and extended mouse buttons while binding
+    local keyCaptureFrame = CreateFrame("Button", nil, configFrame)
     keyCaptureFrame:SetAllPoints(configFrame)
     keyCaptureFrame:SetFrameStrata("TOOLTIP")
     keyCaptureFrame:EnableKeyboard(true)
     keyCaptureFrame:EnableMouse(true)
+    keyCaptureFrame:RegisterForClicks("AnyDown")
+    if keyCaptureFrame.SetPropagateKeyboardInput then
+        keyCaptureFrame:SetPropagateKeyboardInput(false)
+    end
     keyCaptureFrame:Hide()
+
+    local function ApplyCapturedBinding(token)
+        if not token or token == "" then
+            keyCaptureFrame:Hide()
+            keybindButton:SetText(OneButtonMountDB.keybind or "Click to Bind")
+            return
+        end
+
+        local bind = ""
+        if IsShiftKeyDown() then bind = bind .. "SHIFT-" end
+        if IsControlKeyDown() then bind = bind .. "CTRL-" end
+        if IsAltKeyDown() then bind = bind .. "ALT-" end
+        bind = bind .. token
+
+        SetMountKeybind(bind)
+        keybindButton:SetText(bind)
+        keyCaptureFrame:Hide()
+    end
 
     keyCaptureFrame:SetScript("OnKeyDown", function(self, key)
         if key == "ESCAPE" then
@@ -698,19 +767,11 @@ function OneButtonMount:CreateConfigUI()
             return
         end
 
-        local bind = ""
-        if IsShiftKeyDown() then bind = bind .. "SHIFT-" end
-        if IsControlKeyDown() then bind = bind .. "CTRL-" end
-        if IsAltKeyDown() then bind = bind .. "ALT-" end
-        bind = bind .. key
-
-        SetMountKeybind(bind)
-        keybindButton:SetText(bind)
-        self:Hide()
+        ApplyCapturedBinding(key)
     end)
 
-    keyCaptureFrame:SetScript("OnMouseDown", function(self, button)
-        -- Allow mouse buttons as keybinds too
+    keyCaptureFrame:SetScript("OnClick", function(self, button)
+        -- Allow mouse buttons as keybinds too (including Button4/Button5).
         if button == "LeftButton" then
             -- Left click cancels binding mode
             self:Hide()
@@ -718,22 +779,8 @@ function OneButtonMount:CreateConfigUI()
             return
         end
 
-        local bind = ""
-        if IsShiftKeyDown() then bind = bind .. "SHIFT-" end
-        if IsControlKeyDown() then bind = bind .. "CTRL-" end
-        if IsAltKeyDown() then bind = bind .. "ALT-" end
-
         local mouseToken = NormalizeMouseBindingToken(button)
-        if not mouseToken then
-            self:Hide()
-            keybindButton:SetText(OneButtonMountDB.keybind or "Click to Bind")
-            return
-        end
-        bind = bind .. mouseToken
-
-        SetMountKeybind(bind)
-        keybindButton:SetText(bind)
-        self:Hide()
+        ApplyCapturedBinding(mouseToken)
     end)
 
     keybindButton:SetScript("OnClick", function(self)

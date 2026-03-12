@@ -40,9 +40,13 @@ local function setup_env(opts)
         current_map_area_id = opts.current_map_area_id,
         real_zone_text = opts.real_zone_text,
         zone_text = opts.zone_text,
+        mount_journal_mounts = opts.mount_journal_mounts or {},
         c_map_enabled = opts.c_map_enabled ~= false,
         num_companions_mode = opts.num_companions_mode,
         num_companions_value = opts.num_companions_value,
+        shift_down = opts.shift_down or false,
+        control_down = opts.control_down or false,
+        alt_down = opts.alt_down or false,
     }
 
     _G.unpack = table.unpack
@@ -117,11 +121,12 @@ local function setup_env(opts)
         function frame:EnableMouse() end
         function frame:EnableKeyboard() end
         function frame:RegisterForDrag() end
-        function frame:RegisterForClicks() end
+        function frame:RegisterForClicks(...) self.clicks = { ... } end
         function frame:RegisterEvent(event) self.events[event] = true end
         function frame:SetScript(script_name, fn) self.scripts[script_name] = fn end
         function frame:SetFrameStrata() end
         function frame:SetFrameLevel() end
+        function frame:SetPropagateKeyboardInput() end
         function frame:SetHighlightTexture() end
         function frame:SetAttribute(key, value)
             self.attributes = self.attributes or {}
@@ -180,6 +185,11 @@ local function setup_env(opts)
     _G.SlashCmdList = {}
     _G.UISpecialFrames = {}
     _G.ElvUI = nil
+    _G.Enum = {
+        MountType = {
+            Flying = 1,
+        },
+    }
     _G.OneButtonMountDB = copy_table(opts.db or {})
 
     _G.InCombatLockdown = function() return state.in_combat end
@@ -233,9 +243,49 @@ local function setup_env(opts)
     _G.GetZoneText = function() return state.zone_text end
     _G.GetCurrentMapAreaID = function() return state.current_map_area_id end
     _G.GetCursorPosition = function() return 0, 0 end
-    _G.IsShiftKeyDown = function() return false end
-    _G.IsControlKeyDown = function() return false end
-    _G.IsAltKeyDown = function() return false end
+    _G.IsShiftKeyDown = function() return state.shift_down end
+    _G.IsControlKeyDown = function() return state.control_down end
+    _G.IsAltKeyDown = function() return state.alt_down end
+
+    if #state.mount_journal_mounts > 0 then
+        local mount_by_id = {}
+        local mount_ids = {}
+        for _, mount in ipairs(state.mount_journal_mounts) do
+            mount_by_id[mount.mountID] = mount
+            mount_ids[#mount_ids + 1] = mount.mountID
+        end
+
+        _G.C_MountJournal = {
+            GetMountIDs = function()
+                return mount_ids
+            end,
+            GetMountInfoByID = function(mount_id)
+                local mount = mount_by_id[mount_id]
+                if not mount then
+                    return nil
+                end
+
+                local is_collected = mount.isCollected
+                if is_collected == nil then
+                    is_collected = true
+                end
+
+                return mount.name, mount.spellID, mount.icon or "icon", false, true, nil, false, false, nil, false, is_collected
+            end,
+            GetMountInfoExtraByID = function(mount_id)
+                local mount = mount_by_id[mount_id]
+                if not mount then
+                    return nil
+                end
+                return nil, nil, nil, nil, mount.mountTypeID
+            end,
+            SummonByID = function(mount_id)
+                state.last_journal_summon_id = mount_id
+            end,
+        }
+    else
+        _G.C_MountJournal = nil
+    end
 
     if state.c_map_enabled then
         _G.C_Map = {
@@ -341,18 +391,68 @@ run_test("right mouse keybind maps to BUTTON2 token", function()
 
     local key_capture_frame
     for _, frame in ipairs(state.frames) do
-        if frame.scripts["OnMouseDown"] then
+        if frame.scripts["OnClick"] and frame.scripts["OnKeyDown"] then
             key_capture_frame = frame
             break
         end
     end
     assert_true(key_capture_frame ~= nil, "key capture frame not found")
 
-    key_capture_frame.scripts["OnMouseDown"](key_capture_frame, "RightButton")
+    key_capture_frame.scripts["OnClick"](key_capture_frame, "RightButton")
 
     local last_binding = state.binding_clicks[#state.binding_clicks]
     assert_true(last_binding ~= nil, "no binding call recorded")
     assert_equal(last_binding.key, "BUTTON2", "right-click bind token should be BUTTON2")
+end)
+
+run_test("shift plus button5 keybind is captured as SHIFT-BUTTON5", function()
+    local state = setup_env({
+        mounts = {
+            { spellID = 4101, name = "Test Mount", mountType = 0x01 },
+        },
+        db = {},
+    })
+
+    SlashCmdList["ONEBUTTONMOUNT"]("")
+
+    local key_capture_frame
+    for _, frame in ipairs(state.frames) do
+        if frame.scripts["OnClick"] and frame.scripts["OnKeyDown"] then
+            key_capture_frame = frame
+            break
+        end
+    end
+    assert_true(key_capture_frame ~= nil, "key capture frame not found")
+
+    state.shift_down = true
+    key_capture_frame.scripts["OnClick"](key_capture_frame, "Button5")
+
+    local last_binding = state.binding_clicks[#state.binding_clicks]
+    assert_true(last_binding ~= nil, "no binding call recorded")
+    assert_equal(last_binding.key, "SHIFT-BUTTON5", "shift+button5 should be stored as SHIFT-BUTTON5")
+end)
+
+run_test("mount journal fallback populates mounts and can summon", function()
+    local state = setup_env({
+        num_companions_mode = "no_values",
+        mount_journal_mounts = {
+            { mountID = 9001, spellID = 8101, name = "Journal Ground", mountTypeID = 0 },
+            { mountID = 9002, spellID = 8102, name = "Journal Flying", mountTypeID = 1 },
+        },
+        db = {
+            groundMounts = { 8101 },
+            flyingMounts = {},
+        },
+        c_map_enabled = false,
+    })
+
+    SlashCmdList["ONEBUTTONMOUNT"]("")
+    local config_frame = _G.OneButtonMountConfigFrame
+    assert_true(config_frame ~= nil, "config frame not created")
+    assert_true(type(config_frame.mountButtons) == "table" and #config_frame.mountButtons >= 2, "mount journal entries should populate available list")
+
+    SlashCmdList["ONEBUTTONMOUNT"]("mount")
+    assert_equal(state.last_journal_summon_id, 9001, "journal mount should summon via C_MountJournal")
 end)
 
 run_test("non-flying mounts cannot be added to flying rotation", function()
