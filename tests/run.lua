@@ -41,6 +41,9 @@ local function setup_env(opts)
         real_zone_text = opts.real_zone_text,
         zone_text = opts.zone_text,
         mount_journal_mounts = opts.mount_journal_mounts or {},
+        bag_items = opts.bag_items or {},
+        item_spells = opts.item_spells or {},
+        item_infos = opts.item_infos or {},
         c_map_enabled = opts.c_map_enabled ~= false,
         num_companions_mode = opts.num_companions_mode,
         num_companions_value = opts.num_companions_value,
@@ -185,6 +188,8 @@ local function setup_env(opts)
     _G.SlashCmdList = {}
     _G.UISpecialFrames = {}
     _G.ElvUI = nil
+    _G.LE_ITEM_CLASS_MISCELLANEOUS = 15
+    _G.LE_ITEM_MISCELLANEOUS_MOUNT = 5
     _G.Enum = {
         MountType = {
             Flying = 1,
@@ -222,10 +227,26 @@ local function setup_env(opts)
     _G.CastSpellByID = function(spell_id)
         state.last_cast_spell_id = spell_id
     end
+    _G.CastSpellByName = function(spell_name)
+        state.last_cast_spell_name = spell_name
+    end
+    _G.UseItemByName = function(item_id)
+        state.last_used_item_id = item_id
+    end
     _G.GetSpellInfo = function(spell_id)
         for _, mount in ipairs(state.mounts) do
             if mount.spellID == spell_id then
                 return mount.name
+            end
+        end
+        for _, mount in ipairs(state.mount_journal_mounts) do
+            if mount.spellID == spell_id then
+                return mount.name
+            end
+        end
+        for item_id, spell in pairs(state.item_spells) do
+            if spell.spellID == spell_id then
+                return spell.name
             end
         end
         return nil
@@ -246,6 +267,50 @@ local function setup_env(opts)
     _G.IsShiftKeyDown = function() return state.shift_down end
     _G.IsControlKeyDown = function() return state.control_down end
     _G.IsAltKeyDown = function() return state.alt_down end
+    _G.GetItemSpell = function(item_id)
+        local spell = state.item_spells[item_id]
+        if spell then
+            return spell.name, spell.spellID
+        end
+        return nil
+    end
+    _G.GetItemInfoInstant = function(item_id)
+        local info = state.item_infos[item_id]
+        if not info then
+            return item_id, nil, nil, nil, nil, nil, nil
+        end
+        return item_id, info.itemType, info.itemSubType, nil, info.icon, info.classID, info.subClassID
+    end
+    _G.GetItemInfo = function(item_id)
+        local info = state.item_infos[item_id]
+        if not info then
+            return nil
+        end
+        return info.name, nil, nil, nil, nil, info.itemType, info.itemSubType, nil, nil, info.icon
+    end
+    _G.GetItemSubClassInfo = function(class_id, sub_class_id)
+        if class_id == _G.LE_ITEM_CLASS_MISCELLANEOUS and sub_class_id == _G.LE_ITEM_MISCELLANEOUS_MOUNT then
+            return "Mount"
+        end
+        return nil
+    end
+    _G.NUM_BAG_SLOTS = 4
+    _G.GetContainerNumSlots = function(bag)
+        if bag == 0 then
+            return #state.bag_items
+        end
+        return 0
+    end
+    _G.GetContainerItemID = function(bag, slot)
+        if bag == 0 then
+            return state.bag_items[slot]
+        end
+        return nil
+    end
+    _G.C_Container = {
+        GetContainerNumSlots = _G.GetContainerNumSlots,
+        GetContainerItemID = _G.GetContainerItemID,
+    }
 
     if #state.mount_journal_mounts > 0 then
         local mount_by_id = {}
@@ -453,6 +518,34 @@ run_test("mount journal fallback populates mounts and can summon", function()
 
     SlashCmdList["ONEBUTTONMOUNT"]("mount")
     assert_equal(state.last_journal_summon_id, 9001, "journal mount should summon via C_MountJournal")
+end)
+
+run_test("bag mount fallback populates mounts and summons via item use", function()
+    local state = setup_env({
+        num_companions_mode = "no_values",
+        bag_items = { 37012, 37013 },
+        item_spells = {
+            [37012] = { name = "Summon Ground Mount", spellID = 9101 },
+            [37013] = { name = "Summon Flying Mount", spellID = 9102 },
+        },
+        item_infos = {
+            [37012] = { name = "Ground Mount Item", icon = "icon", classID = 15, subClassID = 5, itemType = "Miscellaneous", itemSubType = "Mount" },
+            [37013] = { name = "Flying Mount Item", icon = "icon", classID = 15, subClassID = 5, itemType = "Miscellaneous", itemSubType = "Mount" },
+        },
+        db = {
+            groundMounts = { 9101 },
+            flyingMounts = {},
+        },
+        c_map_enabled = false,
+    })
+
+    SlashCmdList["ONEBUTTONMOUNT"]("")
+    local config_frame = _G.OneButtonMountConfigFrame
+    assert_true(config_frame ~= nil, "config frame not created")
+    assert_true(type(config_frame.mountButtons) == "table" and #config_frame.mountButtons >= 2, "bag mount entries should populate available list")
+
+    SlashCmdList["ONEBUTTONMOUNT"]("mount")
+    assert_equal(state.last_used_item_id, 37012, "bag mount should summon via UseItemByName")
 end)
 
 run_test("non-flying mounts cannot be added to flying rotation", function()

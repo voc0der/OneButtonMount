@@ -120,6 +120,74 @@ end
 
 local function ScanMounts()
     allMounts = {}
+    local seenSpellIDs = {}
+
+    local function AddMountEntry(spellID, name, icon, isFlying, canDetermineFlying, index, journalID, itemID)
+        if not spellID or seenSpellIDs[spellID] then
+            return
+        end
+
+        seenSpellIDs[spellID] = true
+        table.insert(allMounts, {
+            spellID = spellID,
+            name = name or ("Mount " .. tostring(spellID)),
+            icon = icon,
+            isFlying = not not isFlying,
+            canDetermineFlying = not not canDetermineFlying,
+            index = index,
+            journalID = journalID,
+            itemID = itemID,
+        })
+    end
+
+    local function GetBagSlotCount(bag)
+        if C_Container and C_Container.GetContainerNumSlots then
+            return tonumber(C_Container.GetContainerNumSlots(bag)) or 0
+        elseif GetContainerNumSlots then
+            return tonumber(GetContainerNumSlots(bag)) or 0
+        end
+        return 0
+    end
+
+    local function GetBagItemID(bag, slot)
+        if C_Container and C_Container.GetContainerItemID then
+            return C_Container.GetContainerItemID(bag, slot)
+        elseif GetContainerItemID then
+            return GetContainerItemID(bag, slot)
+        end
+        return nil
+    end
+
+    local function IsMountItem(itemID)
+        if C_MountJournal and C_MountJournal.GetMountFromItem then
+            local mountID = C_MountJournal.GetMountFromItem(itemID)
+            if mountID and mountID > 0 then
+                return true
+            end
+        end
+
+        local classID, subClassID
+        if GetItemInfoInstant then
+            local _, _, _, _, _, cID, sID = GetItemInfoInstant(itemID)
+            classID, subClassID = cID, sID
+        end
+
+        if classID and subClassID and LE_ITEM_CLASS_MISCELLANEOUS and LE_ITEM_MISCELLANEOUS_MOUNT then
+            if classID == LE_ITEM_CLASS_MISCELLANEOUS and subClassID == LE_ITEM_MISCELLANEOUS_MOUNT then
+                return true
+            end
+        end
+
+        if GetItemInfo and GetItemSubClassInfo and LE_ITEM_CLASS_MISCELLANEOUS and LE_ITEM_MISCELLANEOUS_MOUNT then
+            local _, _, _, _, _, _, itemSubType = GetItemInfo(itemID)
+            local mountSubType = GetItemSubClassInfo(LE_ITEM_CLASS_MISCELLANEOUS, LE_ITEM_MISCELLANEOUS_MOUNT)
+            if itemSubType and mountSubType and itemSubType == mountSubType then
+                return true
+            end
+        end
+
+        return false
+    end
 
     -- Preferred on newer clients where companion APIs can be absent or empty.
     if C_MountJournal and C_MountJournal.GetMountIDs and C_MountJournal.GetMountInfoByID then
@@ -139,52 +207,43 @@ local function ScanMounts()
                         end
                     end
 
-                    table.insert(allMounts, {
-                        spellID = spellID,
-                        name = name,
-                        icon = icon,
-                        isFlying = isFlying,
-                        canDetermineFlying = canDetermineFlying,
-                        index = nil,
-                        journalID = mountID,
-                    })
+                    AddMountEntry(spellID, name, icon, isFlying, canDetermineFlying, nil, mountID, nil)
                 end
-            end
-
-            if #allMounts > 0 then
-                table.sort(allMounts, function(a, b) return (a.name or "") < (b.name or "") end)
-                return
             end
         end
     end
 
-    -- Legacy fallback for older clients.
-    if not GetNumCompanions or not GetCompanionInfo then
-        return
-    end
-
-    local rawCount = GetNumCompanions("MOUNT")
-    local count = tonumber(rawCount) or 0
-    if count < 1 then
-        return
-    end
-
-    for i = 1, count do
-        local creatureID, creatureName, creatureSpellID, icon, isSummoned, mountType = GetCompanionInfo("MOUNT", i)
-        if creatureSpellID then
-            local isFlying = false
-            if mountType and mountType > 0 then
-                isFlying = bit.band(mountType, MOUNT_TYPE_FLAG_FLYING) > 0
+    -- Legacy companion fallback for older clients.
+    if GetNumCompanions and GetCompanionInfo then
+        local rawCount = GetNumCompanions("MOUNT")
+        local count = tonumber(rawCount) or 0
+        for i = 1, count do
+            local creatureID, creatureName, creatureSpellID, icon, isSummoned, mountType = GetCompanionInfo("MOUNT", i)
+            if creatureSpellID then
+                local isFlying = false
+                if mountType and mountType > 0 then
+                    isFlying = bit.band(mountType, MOUNT_TYPE_FLAG_FLYING) > 0
+                end
+                AddMountEntry(creatureSpellID, creatureName, icon, isFlying, true, i, nil, nil)
             end
-            table.insert(allMounts, {
-                spellID = creatureSpellID,
-                name = creatureName,
-                icon = icon,
-                isFlying = isFlying,
-                canDetermineFlying = true,
-                index = i,
-                journalID = nil,
-            })
+        end
+    end
+
+    -- TBC-style fallback: scan bag items that are mount items.
+    if GetItemSpell then
+        local maxBag = NUM_BAG_SLOTS or 4
+        for bag = 0, maxBag do
+            local slotCount = GetBagSlotCount(bag)
+            for slot = 1, slotCount do
+                local itemID = GetBagItemID(bag, slot)
+                if itemID and IsMountItem(itemID) then
+                    local spellName, spellID = GetItemSpell(itemID)
+                    if spellID then
+                        local itemName, _, _, _, _, _, _, _, _, itemIcon = GetItemInfo(itemID)
+                        AddMountEntry(spellID, itemName or spellName, itemIcon, true, false, nil, nil, itemID)
+                    end
+                end
+            end
         end
     end
 
@@ -353,12 +412,23 @@ local function SummonRandomMount()
             C_MountJournal.SummonByID(mount.journalID)
         elseif mount.index and CallCompanion then
             CallCompanion("MOUNT", mount.index)
+        elseif mount.itemID and UseItemByName then
+            UseItemByName(mount.itemID)
         else
-            CastSpellByID(spellID)
+            if CastSpellByID then
+                CastSpellByID(spellID)
+            elseif CastSpellByName then
+                local spellName = GetSpellInfo(spellID)
+                if spellName then
+                    CastSpellByName(spellName)
+                end
+            end
         end
     else
         -- Mount may have been removed from companion list, try spell
-        CastSpellByID(spellID)
+        if CastSpellByID then
+            CastSpellByID(spellID)
+        end
     end
 end
 
@@ -439,12 +509,17 @@ bindingFrame:SetScript("PreClick", function(self, button)
     end
 
     local spellID = pool[math.random(#pool)]
-    local spellName = GetSpellInfo(spellID)
-    if spellName then
-        self:SetAttribute("macrotext", "/cast " .. spellName)
+    local mount = GetMountBySpellID(spellID)
+    if mount and mount.itemID then
+        self:SetAttribute("macrotext", "/use item:" .. mount.itemID)
     else
-        -- Fallback: clear macrotext to avoid firing a stale spell
-        self:SetAttribute("macrotext", "")
+        local spellName = GetSpellInfo(spellID)
+        if spellName then
+            self:SetAttribute("macrotext", "/cast " .. spellName)
+        else
+            -- Fallback: clear macrotext to avoid firing a stale spell
+            self:SetAttribute("macrotext", "")
+        end
     end
 end)
 

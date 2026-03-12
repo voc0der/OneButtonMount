@@ -1,5 +1,13 @@
 ## [Unreleased]
 
+## [1.0.4] - 2026-03-12
+
+### Fixed
+- Added TBC bag-item mount scanning fallback so mount lists populate when companion and journal APIs are unavailable
+- Added item-based summon path (`UseItemByName`) for bag-backed mounts
+- Updated secure keybind macro generation to use `/use item:<id>` for item-backed mounts
+- Improved compatibility across companion, mount journal, and bag-based mount sources
+
 ## [1.0.3] - 2026-03-12
 
 ### Fixed
