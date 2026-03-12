@@ -1,5 +1,14 @@
 ## [Unreleased]
 
+## [1.0.9] - 2026-03-12
+
+### Fixed
+- Refined mount icon rendering to remove the inner-square/checkbox-style artifact in icon slots
+- Updated icon border styling for cleaner, more consistent mount tiles
+
+### Changed
+- Updated README branding header with repository icon asset and centered project intro
+
 ## [1.0.8] - 2026-03-12
 
 ### Fixed
