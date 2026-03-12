@@ -48,6 +48,10 @@
 
 ## Config UI
 
+<p align="center">
+  <img src="assets/config-ui-screenshot.png" alt="OneButtonMount config UI" width="500" />
+</p>
+
 - Available mounts list:
   - Left-click adds a mount to Ground pool
   - Right-click adds a mount to Flying pool
