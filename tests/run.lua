@@ -10,6 +10,8 @@ local function assert_true(value, message)
     end
 end
 
+local native_tonumber = tonumber
+
 local function copy_table(value)
     if type(value) ~= "table" then
         return value
@@ -50,10 +52,22 @@ local function setup_env(opts)
         shift_down = opts.shift_down or false,
         control_down = opts.control_down or false,
         alt_down = opts.alt_down or false,
+        num_slots_mode = opts.num_slots_mode,
+        strict_tonumber = opts.strict_tonumber or false,
     }
 
     _G.unpack = table.unpack
     _G.tinsert = table.insert
+    if state.strict_tonumber then
+        _G.tonumber = function(value, base)
+            if value == nil then
+                error("bad argument #1 to 'tonumber' (value expected)")
+            end
+            return native_tonumber(value, base)
+        end
+    else
+        _G.tonumber = native_tonumber
+    end
 
     if not math.atan2 then
         math.atan2 = function(y, x)
@@ -296,6 +310,12 @@ local function setup_env(opts)
     end
     _G.NUM_BAG_SLOTS = 4
     _G.GetContainerNumSlots = function(bag)
+        if state.num_slots_mode == "nil" then
+            return nil
+        end
+        if state.num_slots_mode == "no_values" then
+            return
+        end
         if bag == 0 then
             return #state.bag_items
         end
@@ -497,6 +517,33 @@ run_test("shift plus button5 keybind is captured as SHIFT-BUTTON5", function()
     assert_equal(last_binding.key, "SHIFT-BUTTON5", "shift+button5 should be stored as SHIFT-BUTTON5")
 end)
 
+run_test("shift plus button5 keybind is captured via mouse down fallback", function()
+    local state = setup_env({
+        mounts = {
+            { spellID = 4102, name = "Test Mount", mountType = 0x01 },
+        },
+        db = {},
+    })
+
+    SlashCmdList["ONEBUTTONMOUNT"]("")
+
+    local key_capture_frame
+    for _, frame in ipairs(state.frames) do
+        if frame.scripts["OnMouseDown"] and frame.scripts["OnKeyDown"] then
+            key_capture_frame = frame
+            break
+        end
+    end
+    assert_true(key_capture_frame ~= nil, "key capture frame with mouse down handler not found")
+
+    state.shift_down = true
+    key_capture_frame.scripts["OnMouseDown"](key_capture_frame, "Button5")
+
+    local last_binding = state.binding_clicks[#state.binding_clicks]
+    assert_true(last_binding ~= nil, "no binding call recorded")
+    assert_equal(last_binding.key, "SHIFT-BUTTON5", "shift+button5 should be stored as SHIFT-BUTTON5 from mouse down")
+end)
+
 run_test("mount journal fallback populates mounts and can summon", function()
     local state = setup_env({
         num_companions_mode = "no_values",
@@ -548,6 +595,28 @@ run_test("bag mount fallback populates mounts and summons via item use", functio
     assert_equal(state.last_used_item_id, 37012, "bag mount should summon via UseItemByName")
 end)
 
+run_test("companion index probe fallback works when companion count is unavailable", function()
+    local state = setup_env({
+        num_companions_mode = "no_values",
+        mounts = {
+            { spellID = 9201, name = "Probe Mount", mountType = 0x01 },
+        },
+        db = {
+            groundMounts = { 9201 },
+            flyingMounts = {},
+        },
+        c_map_enabled = false,
+    })
+
+    SlashCmdList["ONEBUTTONMOUNT"]("")
+    local config_frame = _G.OneButtonMountConfigFrame
+    assert_true(config_frame ~= nil, "config frame not created")
+    assert_true(type(config_frame.mountButtons) == "table" and #config_frame.mountButtons >= 1, "companion probe should populate available mounts")
+
+    SlashCmdList["ONEBUTTONMOUNT"]("mount")
+    assert_equal(state.last_call_companion_index, 1, "companion probe fallback should summon via CallCompanion")
+end)
+
 run_test("non-flying mounts cannot be added to flying rotation", function()
     local state = setup_env({
         mounts = {
@@ -588,6 +657,37 @@ run_test("non-flying mounts cannot be added to flying rotation", function()
     assert_true(found_message, "expected rejection message was not printed")
 end)
 
+run_test("unknown companion mount type can still be added to flying rotation", function()
+    local state = setup_env({
+        mounts = {
+            { spellID = 5002, name = "Unknown Type Mount", mountType = 0 },
+        },
+        db = {
+            groundMounts = {},
+            flyingMounts = {},
+        },
+    })
+
+    SlashCmdList["ONEBUTTONMOUNT"]("")
+
+    local config_frame = _G.OneButtonMountConfigFrame
+    assert_true(config_frame ~= nil, "config frame not created")
+    assert_true(type(config_frame.mountButtons) == "table", "available mount buttons missing")
+
+    local unknown_type_button
+    for _, button in ipairs(config_frame.mountButtons) do
+        if button.mountData and button.mountData.spellID == 5002 and not button.pool then
+            unknown_type_button = button
+            break
+        end
+    end
+    assert_true(unknown_type_button ~= nil, "unknown type mount button not found")
+
+    unknown_type_button.scripts["OnClick"](unknown_type_button, "RightButton")
+    assert_equal(#OneButtonMountDB.flyingMounts, 1, "unknown type mount should be allowed into flying pool")
+    assert_equal(OneButtonMountDB.flyingMounts[1], 5002, "expected unknown type mount spellID in flying pool")
+end)
+
 run_test("nil companion count on addon load does not crash", function()
     local state = setup_env({
         mounts = {
@@ -618,6 +718,20 @@ run_test("empty-return companion count on addon load does not crash", function()
 
     assert_true(type(state.chat) == "table", "addon should finish loading without runtime error")
     assert_equal(#OneButtonMountDB.groundMounts, 1, "existing pool should remain intact when count has no return values")
+end)
+
+run_test("strict tonumber mode does not crash on nil companion and bag slot values", function()
+    local state = setup_env({
+        strict_tonumber = true,
+        num_companions_mode = "no_values",
+        num_slots_mode = "no_values",
+        db = {
+            groundMounts = {},
+            flyingMounts = {},
+        },
+    })
+
+    assert_true(type(state.chat) == "table", "addon should finish loading under strict tonumber behavior")
 end)
 
 print(string.format("Ran %d tests, %d failures", total, failures))

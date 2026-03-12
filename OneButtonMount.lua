@@ -114,6 +114,37 @@ local function SetSolidColor(texture, r, g, b, a)
     end
 end
 
+-- Classic Lua compatibility: some clients throw when tonumber is called with nil.
+local function SafeToNumber(value)
+    if value == nil then
+        return nil
+    end
+
+    local ok, number = pcall(tonumber, value)
+    if ok then
+        return number
+    end
+
+    return nil
+end
+
+local function HasBitFlag(value, flag)
+    if type(value) ~= "number" or type(flag) ~= "number" then
+        return false
+    end
+
+    if bit and bit.band then
+        return bit.band(value, flag) ~= 0
+    end
+
+    if bit32 and bit32.band then
+        return bit32.band(value, flag) ~= 0
+    end
+
+    -- Fallback when bit libs are unavailable.
+    return (value % (flag + flag)) >= flag
+end
+
 -- ============================================================================
 -- Mount Detection
 -- ============================================================================
@@ -123,14 +154,15 @@ local function ScanMounts()
     local seenSpellIDs = {}
 
     local function AddMountEntry(spellID, name, icon, isFlying, canDetermineFlying, index, journalID, itemID)
-        if not spellID or seenSpellIDs[spellID] then
+        local normalizedSpellID = SafeToNumber(spellID)
+        if not normalizedSpellID or seenSpellIDs[normalizedSpellID] then
             return
         end
 
-        seenSpellIDs[spellID] = true
+        seenSpellIDs[normalizedSpellID] = true
         table.insert(allMounts, {
-            spellID = spellID,
-            name = name or ("Mount " .. tostring(spellID)),
+            spellID = normalizedSpellID,
+            name = name or ("Mount " .. tostring(normalizedSpellID)),
             icon = icon,
             isFlying = not not isFlying,
             canDetermineFlying = not not canDetermineFlying,
@@ -142,23 +174,39 @@ local function ScanMounts()
 
     local function GetBagSlotCount(bag)
         if C_Container and C_Container.GetContainerNumSlots then
-            return tonumber(C_Container.GetContainerNumSlots(bag)) or 0
+            local slotCount = C_Container.GetContainerNumSlots(bag)
+            return SafeToNumber(slotCount) or 0
         elseif GetContainerNumSlots then
-            return tonumber(GetContainerNumSlots(bag)) or 0
+            local slotCount = GetContainerNumSlots(bag)
+            return SafeToNumber(slotCount) or 0
         end
         return 0
     end
 
     local function GetBagItemID(bag, slot)
         if C_Container and C_Container.GetContainerItemID then
-            return C_Container.GetContainerItemID(bag, slot)
+            return SafeToNumber(C_Container.GetContainerItemID(bag, slot))
         elseif GetContainerItemID then
-            return GetContainerItemID(bag, slot)
+            return SafeToNumber(GetContainerItemID(bag, slot))
+        elseif GetContainerItemLink then
+            local itemLink = GetContainerItemLink(bag, slot)
+            if itemLink then
+                local itemID = string.match(itemLink, "item:(%d+)")
+                return SafeToNumber(itemID)
+            end
         end
         return nil
     end
 
     local function IsMountItem(itemID)
+        itemID = SafeToNumber(itemID)
+        if not itemID then
+            return false
+        end
+
+        local miscClassID = LE_ITEM_CLASS_MISCELLANEOUS or 15
+        local mountSubClassID = LE_ITEM_MISCELLANEOUS_MOUNT or 5
+
         if C_MountJournal and C_MountJournal.GetMountFromItem then
             local mountID = C_MountJournal.GetMountFromItem(itemID)
             if mountID and mountID > 0 then
@@ -169,19 +217,22 @@ local function ScanMounts()
         local classID, subClassID
         if GetItemInfoInstant then
             local _, _, _, _, _, cID, sID = GetItemInfoInstant(itemID)
-            classID, subClassID = cID, sID
+            classID, subClassID = SafeToNumber(cID), SafeToNumber(sID)
         end
 
-        if classID and subClassID and LE_ITEM_CLASS_MISCELLANEOUS and LE_ITEM_MISCELLANEOUS_MOUNT then
-            if classID == LE_ITEM_CLASS_MISCELLANEOUS and subClassID == LE_ITEM_MISCELLANEOUS_MOUNT then
+        if classID and subClassID then
+            if classID == miscClassID and subClassID == mountSubClassID then
                 return true
             end
         end
 
-        if GetItemInfo and GetItemSubClassInfo and LE_ITEM_CLASS_MISCELLANEOUS and LE_ITEM_MISCELLANEOUS_MOUNT then
-            local _, _, _, _, _, _, itemSubType = GetItemInfo(itemID)
-            local mountSubType = GetItemSubClassInfo(LE_ITEM_CLASS_MISCELLANEOUS, LE_ITEM_MISCELLANEOUS_MOUNT)
+        if GetItemInfo and GetItemSubClassInfo then
+            local _, _, _, _, _, itemType, itemSubType = GetItemInfo(itemID)
+            local mountSubType = GetItemSubClassInfo(miscClassID, mountSubClassID)
             if itemSubType and mountSubType and itemSubType == mountSubType then
+                return true
+            end
+            if itemType and type(itemSubType) == "string" and string.lower(itemSubType) == "mount" then
                 return true
             end
         end
@@ -216,22 +267,76 @@ local function ScanMounts()
     -- Legacy companion fallback for older clients.
     if GetNumCompanions and GetCompanionInfo then
         local rawCount = GetNumCompanions("MOUNT")
-        local count = tonumber(rawCount) or 0
-        for i = 1, count do
+        local count = SafeToNumber(rawCount)
+
+        local function AddCompanionMountByIndex(i)
             local creatureID, creatureName, creatureSpellID, icon, isSummoned, mountType = GetCompanionInfo("MOUNT", i)
-            if creatureSpellID then
-                local isFlying = false
-                if mountType and mountType > 0 then
-                    isFlying = bit.band(mountType, MOUNT_TYPE_FLAG_FLYING) > 0
+            local normalizedSpellID = SafeToNumber(creatureSpellID)
+            if not creatureID and not normalizedSpellID then
+                return false
+            end
+
+            if normalizedSpellID then
+                local mountTypeNumber = SafeToNumber(mountType)
+                local canDetermineFlying = mountTypeNumber ~= nil and mountTypeNumber > 0
+                local isFlying = true
+                if canDetermineFlying then
+                    isFlying = HasBitFlag(mountTypeNumber, MOUNT_TYPE_FLAG_FLYING)
                 end
-                AddMountEntry(creatureSpellID, creatureName, icon, isFlying, true, i, nil, nil)
+
+                AddMountEntry(normalizedSpellID, creatureName, icon, isFlying, canDetermineFlying, i, nil, nil)
+            end
+
+            return true
+        end
+
+        if count and count > 0 then
+            for i = 1, count do
+                AddCompanionMountByIndex(i)
+            end
+        else
+            -- Some Classic clients return nil/empty counts but still expose companion entries by index.
+            local maxProbe = 500
+            local emptyStreak = 0
+            for i = 1, maxProbe do
+                local hasEntry = AddCompanionMountByIndex(i)
+                if hasEntry then
+                    emptyStreak = 0
+                else
+                    emptyStreak = emptyStreak + 1
+                    if emptyStreak >= 3 then
+                        break
+                    end
+                end
+            end
+        end
+    end
+
+    -- Secondary companion fallback for clients where GetNumCompanions is missing.
+    if (not GetNumCompanions) and GetCompanionInfo and #allMounts == 0 then
+        for i = 1, 500 do
+            local creatureID, creatureName, creatureSpellID, icon, isSummoned, mountType = GetCompanionInfo("MOUNT", i)
+            local normalizedSpellID = SafeToNumber(creatureSpellID)
+            if not creatureID and not normalizedSpellID then
+                break
+            end
+
+            if normalizedSpellID then
+                local mountTypeNumber = SafeToNumber(mountType)
+                local canDetermineFlying = mountTypeNumber ~= nil and mountTypeNumber > 0
+                local isFlying = true
+                if canDetermineFlying then
+                    isFlying = HasBitFlag(mountTypeNumber, MOUNT_TYPE_FLAG_FLYING)
+                end
+
+                AddMountEntry(normalizedSpellID, creatureName, icon, isFlying, canDetermineFlying, i, nil, nil)
             end
         end
     end
 
     -- TBC-style fallback: scan bag items that are mount items.
     if GetItemSpell then
-        local maxBag = NUM_BAG_SLOTS or 4
+        local maxBag = SafeToNumber(NUM_BAG_SLOTS) or 4
         for bag = 0, maxBag do
             local slotCount = GetBagSlotCount(bag)
             for slot = 1, slotCount do
@@ -807,7 +912,7 @@ function OneButtonMount:CreateConfigUI()
     keyCaptureFrame:SetFrameStrata("TOOLTIP")
     keyCaptureFrame:EnableKeyboard(true)
     keyCaptureFrame:EnableMouse(true)
-    keyCaptureFrame:RegisterForClicks("AnyDown")
+    keyCaptureFrame:RegisterForClicks("AnyDown", "AnyUp")
     if keyCaptureFrame.SetPropagateKeyboardInput then
         keyCaptureFrame:SetPropagateKeyboardInput(false)
     end
@@ -856,6 +961,14 @@ function OneButtonMount:CreateConfigUI()
 
         local mouseToken = NormalizeMouseBindingToken(button)
         ApplyCapturedBinding(mouseToken)
+    end)
+
+    keyCaptureFrame:SetScript("OnMouseDown", function(self, button)
+        -- Side buttons can be unreliable through OnClick on some Classic clients.
+        if button == "Button4" or button == "Button5" then
+            local mouseToken = NormalizeMouseBindingToken(button)
+            ApplyCapturedBinding(mouseToken)
+        end
     end)
 
     keybindButton:SetScript("OnClick", function(self)

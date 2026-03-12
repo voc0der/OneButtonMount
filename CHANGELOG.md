@@ -1,5 +1,14 @@
 ## [Unreleased]
 
+## [1.0.5] - 2026-03-12
+
+### Fixed
+- Added a strict-safe number conversion helper to prevent Classic `tonumber(nil)` startup/runtime failures
+- Added companion index probing fallback so mounts still populate when `GetNumCompanions("MOUNT")` returns nil/empty
+- Improved companion flying classification when mount type metadata is unavailable, allowing assignment without false rejection
+- Hardened bag slot and bag item parsing across mixed Classic container APIs
+- Added side-mouse chord capture fallback through `OnMouseDown` for more reliable `SHIFT-BUTTON4/5` binding capture
+
 ## [1.0.4] - 2026-03-12
 
 ### Fixed
