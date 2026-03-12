@@ -899,11 +899,30 @@ local function CreateMountIcon(parent, mountData, pool, index)
     tex:SetTexCoord(0.08, 0.92, 0.08, 0.92)
     btn.iconTexture = tex
 
-    local border = btn:CreateTexture(nil, "OVERLAY")
-    border:SetTexture("Interface\\Buttons\\UI-Quickslot2")
-    border:SetBlendMode("BLEND")
-    border:SetAlpha(0.9)
-    border:SetAllPoints()
+    -- Use a simple frame outline so the icon body remains fully visible.
+    local topEdge = btn:CreateTexture(nil, "OVERLAY")
+    topEdge:SetSize(1, 1)
+    topEdge:SetPoint("TOPLEFT", btn, "TOPLEFT", -1, 1)
+    topEdge:SetPoint("TOPRIGHT", btn, "TOPRIGHT", 1, 1)
+    SetSolidColor(topEdge, 0.9, 0.9, 0.9, 0.9)
+
+    local bottomEdge = btn:CreateTexture(nil, "OVERLAY")
+    bottomEdge:SetSize(1, 1)
+    bottomEdge:SetPoint("BOTTOMLEFT", btn, "BOTTOMLEFT", -1, -1)
+    bottomEdge:SetPoint("BOTTOMRIGHT", btn, "BOTTOMRIGHT", 1, -1)
+    SetSolidColor(bottomEdge, 0.9, 0.9, 0.9, 0.9)
+
+    local leftEdge = btn:CreateTexture(nil, "OVERLAY")
+    leftEdge:SetSize(1, 1)
+    leftEdge:SetPoint("TOPLEFT", btn, "TOPLEFT", -1, 1)
+    leftEdge:SetPoint("BOTTOMLEFT", btn, "BOTTOMLEFT", -1, -1)
+    SetSolidColor(leftEdge, 0.9, 0.9, 0.9, 0.9)
+
+    local rightEdge = btn:CreateTexture(nil, "OVERLAY")
+    rightEdge:SetSize(1, 1)
+    rightEdge:SetPoint("TOPRIGHT", btn, "TOPRIGHT", 1, 1)
+    rightEdge:SetPoint("BOTTOMRIGHT", btn, "BOTTOMRIGHT", 1, -1)
+    SetSolidColor(rightEdge, 0.9, 0.9, 0.9, 0.9)
 
     btn:SetHighlightTexture("Interface\\Buttons\\ButtonHilight-Square", "ADD")
 

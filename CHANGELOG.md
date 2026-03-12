@@ -1,5 +1,11 @@
 ## [Unreleased]
 
+## [1.0.10] - 2026-03-12
+
+### Fixed
+- Removed mount icon overlay behavior that could make icons appear as hollow/box-only tiles
+- Kept icon edge cropping and replaced the heavy overlay with a lightweight outline so icon artwork remains clearly visible
+
 ## [1.0.9] - 2026-03-12
 
 ### Fixed
