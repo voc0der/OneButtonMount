@@ -37,6 +37,7 @@ local function setup_env(opts)
         in_instance = opts.in_instance or false,
         mounted = opts.mounted or false,
         in_combat = opts.in_combat or false,
+        instance_info = opts.instance_info,
         map_id = opts.map_id,
         map_infos = opts.map_infos or {},
         current_map_area_id = opts.current_map_area_id,
@@ -217,6 +218,22 @@ local function setup_env(opts)
     _G.Dismount = function() state.dismounted = true end
     _G.IsIndoors = function() return state.indoors end
     _G.IsInInstance = function() return state.in_instance, "none" end
+    _G.GetInstanceInfo = function()
+        if not state.instance_info then
+            return nil
+        end
+
+        return state.instance_info.name,
+            state.instance_info.instanceType or "none",
+            state.instance_info.difficultyID,
+            state.instance_info.difficultyName,
+            state.instance_info.maxPlayers,
+            state.instance_info.dynamicDifficulty,
+            state.instance_info.isDynamic,
+            state.instance_info.instanceID,
+            state.instance_info.instanceGroupSize,
+            state.instance_info.lfgDungeonID
+    end
     _G.GetNumCompanions = function()
         if state.num_companions_mode == "nil" then
             return nil
@@ -489,6 +506,93 @@ run_test("is flyable area signal selects flying pool even without riding spell f
     SlashCmdList["ONEBUTTONMOUNT"]("mount")
 
     assert_equal(state.last_call_companion_index, 2, "flying pool should be selected when IsFlyableArea returns true")
+end)
+
+run_test("aq40 only uses configured qiraji crystals", function()
+    local state = setup_env({
+        num_companions_mode = "no_values",
+        indoors = true,
+        in_instance = true,
+        instance_info = {
+            name = "Temple of Ahn'Qiraj",
+            instanceType = "raid",
+            instanceID = 531,
+        },
+        bag_items = { 21218, 37012 },
+        item_spells = {
+            [21218] = { name = "Summon Blue Qiraji Battle Tank", spellID = 9301 },
+            [37012] = { name = "Summon Ground Mount", spellID = 9302 },
+        },
+        item_infos = {
+            [21218] = { name = "Blue Qiraji Resonating Crystal", icon = "icon", classID = 15, subClassID = 5, itemType = "Miscellaneous", itemSubType = "Mount" },
+            [37012] = { name = "Ground Mount Item", icon = "icon", classID = 15, subClassID = 5, itemType = "Miscellaneous", itemSubType = "Mount" },
+        },
+        db = {
+            groundMounts = { 9301, 9302 },
+            flyingMounts = {},
+        },
+        c_map_enabled = false,
+    })
+
+    SlashCmdList["ONEBUTTONMOUNT"]("mount")
+
+    assert_equal(state.last_used_item_id, 21218, "AQ40 should only allow configured qiraji crystals")
+end)
+
+run_test("outside aq40 excludes qiraji crystals from selection", function()
+    local state = setup_env({
+        num_companions_mode = "no_values",
+        in_instance = false,
+        bag_items = { 21218, 37012 },
+        item_spells = {
+            [21218] = { name = "Summon Blue Qiraji Battle Tank", spellID = 9311 },
+            [37012] = { name = "Summon Ground Mount", spellID = 9312 },
+        },
+        item_infos = {
+            [21218] = { name = "Blue Qiraji Resonating Crystal", icon = "icon", classID = 15, subClassID = 5, itemType = "Miscellaneous", itemSubType = "Mount" },
+            [37012] = { name = "Ground Mount Item", icon = "icon", classID = 15, subClassID = 5, itemType = "Miscellaneous", itemSubType = "Mount" },
+        },
+        db = {
+            groundMounts = { 9311, 9312 },
+            flyingMounts = {},
+        },
+        c_map_enabled = false,
+    })
+
+    SlashCmdList["ONEBUTTONMOUNT"]("mount")
+
+    assert_equal(state.last_used_item_id, 37012, "outside AQ40 should skip qiraji crystal mounts")
+end)
+
+run_test("outside aq40 with only qiraji mounts reports no eligible mounts", function()
+    local state = setup_env({
+        num_companions_mode = "no_values",
+        in_instance = false,
+        bag_items = { 21218 },
+        item_spells = {
+            [21218] = { name = "Summon Blue Qiraji Battle Tank", spellID = 9321 },
+        },
+        item_infos = {
+            [21218] = { name = "Blue Qiraji Resonating Crystal", icon = "icon", classID = 15, subClassID = 5, itemType = "Miscellaneous", itemSubType = "Mount" },
+        },
+        db = {
+            groundMounts = { 9321 },
+            flyingMounts = {},
+        },
+        c_map_enabled = false,
+    })
+
+    SlashCmdList["ONEBUTTONMOUNT"]("mount")
+
+    assert_equal(state.last_used_item_id, nil, "outside AQ40 should not summon qiraji crystals")
+    local found_message = false
+    for _, line in ipairs(state.chat) do
+        if string.find(line, "Qiraji crystals are AQ40-only", 1, true) then
+            found_message = true
+            break
+        end
+    end
+    assert_true(found_message, "expected AQ40-only eligibility message")
 end)
 
 run_test("right mouse keybind maps to BUTTON2 token", function()

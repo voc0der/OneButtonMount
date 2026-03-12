@@ -1,5 +1,13 @@
 ## [Unreleased]
 
+## [1.0.8] - 2026-03-12
+
+### Fixed
+- Added AQ40-specific mount rules: inside Temple of Ahn'Qiraj only configured Qiraji crystal mounts are eligible
+- Outside AQ40, Qiraji crystal mounts are now excluded from random selection even if present in configured pools
+- Unified eligibility filtering between click summon and keybind summon paths so both respect AQ40 crystal rules
+- Added regression tests for AQ40 crystal-only selection and non-AQ40 exclusion behavior
+
 ## [1.0.7] - 2026-03-12
 
 ### Fixed

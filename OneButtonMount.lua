@@ -44,6 +44,18 @@ local ARTISAN_RIDING = 34091
 -- Flying mounts have bit 0x02 set (mountType values like 0x0f, 0x1f include flying)
 local MOUNT_TYPE_FLAG_FLYING = 0x02
 
+-- Temple of Ahn'Qiraj (AQ40)
+local AQ40_INSTANCE_ID = 531
+local AQ40_ZONE_NAMES = {
+    ["Temple of Ahn'Qiraj"] = true,
+}
+local AQ40_CRYSTAL_ITEM_IDS = {
+    [21218] = true, -- Blue Qiraji Resonating Crystal
+    [21321] = true, -- Red Qiraji Resonating Crystal
+    [21323] = true, -- Green Qiraji Resonating Crystal
+    [21324] = true, -- Yellow Qiraji Resonating Crystal
+}
+
 -- ============================================================================
 -- State
 -- ============================================================================
@@ -442,6 +454,129 @@ local function GetMountBySpellID(spellID)
     return nil
 end
 
+local function IsInAQ40()
+    if GetInstanceInfo then
+        local name, instanceType, difficultyID, difficultyName, maxPlayers, dynamicDifficulty, isDynamic, instanceID = GetInstanceInfo()
+        if SafeToNumber(instanceID) == AQ40_INSTANCE_ID then
+            return true
+        end
+
+        if instanceType == "raid" and name and AQ40_ZONE_NAMES[name] then
+            return true
+        end
+    end
+
+    -- Fallback when instance APIs are unavailable or incomplete.
+    local zone = GetRealZoneText and GetRealZoneText()
+    if zone and AQ40_ZONE_NAMES[zone] then
+        local inInstance = IsInInstance and select(1, IsInInstance())
+        if inInstance then
+            return true
+        end
+    end
+
+    return false
+end
+
+local function IsAQ40CrystalMount(mount)
+    if not mount then
+        return false
+    end
+
+    if mount.itemID and AQ40_CRYSTAL_ITEM_IDS[mount.itemID] then
+        return true
+    end
+
+    local mountName = string.lower(mount.name or "")
+    if mountName == "" and GetSpellInfo and mount.spellID then
+        local spellName = GetSpellInfo(mount.spellID)
+        if type(spellName) == "string" then
+            mountName = string.lower(spellName)
+        end
+    end
+
+    if mountName ~= "" and string.find(mountName, "qiraji", 1, true) then
+        if string.find(mountName, "resonating crystal", 1, true) then
+            return true
+        end
+
+        if string.find(mountName, "battle tank", 1, true) then
+            return true
+        end
+    end
+
+    return false
+end
+
+local function BuildEligibleMountPool()
+    local flyingMounts = OneButtonMountDB.flyingMounts or {}
+    local groundMounts = OneButtonMountDB.groundMounts or {}
+
+    local function FilterPool(sourcePool, includeAQ40Crystals)
+        local filtered = {}
+        for _, spellID in ipairs(sourcePool) do
+            local mount = GetMountBySpellID(spellID)
+            if mount then
+                local isAQ40Crystal = IsAQ40CrystalMount(mount)
+                if includeAQ40Crystals == isAQ40Crystal then
+                    table.insert(filtered, spellID)
+                end
+            end
+        end
+        return filtered
+    end
+
+    if IsInAQ40() then
+        local mergedPool = {}
+        local seen = {}
+        for _, spellID in ipairs(groundMounts) do
+            if not seen[spellID] then
+                seen[spellID] = true
+                table.insert(mergedPool, spellID)
+            end
+        end
+        for _, spellID in ipairs(flyingMounts) do
+            if not seen[spellID] then
+                seen[spellID] = true
+                table.insert(mergedPool, spellID)
+            end
+        end
+
+        local aq40Pool = FilterPool(mergedPool, true)
+        if #aq40Pool > 0 then
+            return aq40Pool, nil
+        end
+
+        return nil, "AQ40: add at least one Qiraji Resonating Crystal to your rotation."
+    end
+
+    local function SelectPrimaryAndSecondaryPools()
+        if CanFlyHere() and #flyingMounts > 0 then
+            return flyingMounts, groundMounts
+        end
+        return groundMounts, nil
+    end
+
+    local primaryPool, secondaryPool = SelectPrimaryAndSecondaryPools()
+    local primaryEligible = FilterPool(primaryPool, false)
+    if #primaryEligible > 0 then
+        return primaryEligible, nil
+    end
+
+    if secondaryPool and #secondaryPool > 0 then
+        local secondaryEligible = FilterPool(secondaryPool, false)
+        if #secondaryEligible > 0 then
+            return secondaryEligible, nil
+        end
+    end
+
+    if #groundMounts == 0 and #flyingMounts == 0 then
+        return nil, "No mounts in your rotation! Open the config with /onebuttonmount"
+    end
+
+    return nil, "No eligible mounts here. Qiraji crystals are AQ40-only."
+end
+
 local function BuildMountLookup()
     local lookup = {}
     for _, mount in ipairs(allMounts) do
@@ -495,7 +630,8 @@ local function SummonRandomMount()
         return
     end
 
-    if IsIndoors() then
+    local inAQ40 = IsInAQ40()
+    if IsIndoors() and not inAQ40 then
         Print("Cannot mount indoors.")
         return
     end
@@ -503,17 +639,9 @@ local function SummonRandomMount()
     ScanMounts()
     SanitizeSavedMountPools()
 
-    local canFly = CanFlyHere()
-    local pool
-    local flyingMounts = OneButtonMountDB.flyingMounts or {}
-    local groundMounts = OneButtonMountDB.groundMounts or {}
-
-    if canFly and #flyingMounts > 0 then
-        pool = flyingMounts
-    elseif #groundMounts > 0 then
-        pool = groundMounts
-    else
-        Print("No mounts in your rotation! Open the config with /onebuttonmount")
+    local pool, poolError = BuildEligibleMountPool()
+    if not pool or #pool == 0 then
+        Print(poolError or "No mounts in your rotation! Open the config with /onebuttonmount")
         return
     end
 
@@ -606,18 +734,17 @@ bindingFrame:SetScript("PreClick", function(self, button)
         return
     end
 
-    local canFly = CanFlyHere()
-    local pool
-    local flyingMounts = OneButtonMountDB.flyingMounts or {}
-    local groundMounts = OneButtonMountDB.groundMounts or {}
-
-    if canFly and #flyingMounts > 0 then
-        pool = flyingMounts
-    elseif #groundMounts > 0 then
-        pool = groundMounts
-    else
+    local inAQ40 = IsInAQ40()
+    if IsIndoors() and not inAQ40 then
         self:SetAttribute("macrotext", "")
-        Print("No mounts in rotation!")
+        Print("Cannot mount indoors.")
+        return
+    end
+
+    local pool, poolError = BuildEligibleMountPool()
+    if not pool or #pool == 0 then
+        self:SetAttribute("macrotext", "")
+        Print(poolError or "No mounts in rotation!")
         return
     end
 
