@@ -1,5 +1,11 @@
 ## [Unreleased]
 
+## [1.0.7] - 2026-03-12
+
+### Fixed
+- `CanFlyHere()` now prefers native `IsFlyableArea()` when available, fixing wrong ground-mount selection in flyable Outland cities such as Shattrath
+- Added regression test to ensure flyable-area signal selects the flying pool even when riding spell flags are unreliable
+
 ## [1.0.6] - 2026-03-12
 
 ### Fixed

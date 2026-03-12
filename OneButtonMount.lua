@@ -356,11 +356,20 @@ local function ScanMounts()
 end
 
 local function CanFlyHere()
+    if IsFlyableArea then
+        local ok, flyable = pcall(IsFlyableArea)
+        if ok and flyable ~= nil then
+            return not not flyable
+        end
+    end
+
     -- Check if player has flying riding skill
-    local hasExpert = IsSpellKnown(EXPERT_RIDING)
-    local hasArtisan = IsSpellKnown(ARTISAN_RIDING)
-    if not hasExpert and not hasArtisan then
-        return false
+    if IsSpellKnown then
+        local hasExpert = IsSpellKnown(EXPERT_RIDING)
+        local hasArtisan = IsSpellKnown(ARTISAN_RIDING)
+        if not hasExpert and not hasArtisan then
+            return false
+        end
     end
 
     -- Must be outdoors and not in an instance

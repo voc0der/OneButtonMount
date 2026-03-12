@@ -54,6 +54,7 @@ local function setup_env(opts)
         alt_down = opts.alt_down or false,
         num_slots_mode = opts.num_slots_mode,
         strict_tonumber = opts.strict_tonumber or false,
+        is_flyable_area = opts.is_flyable_area,
     }
 
     _G.unpack = table.unpack
@@ -286,6 +287,7 @@ local function setup_env(opts)
     _G.IsShiftKeyDown = function() return state.shift_down end
     _G.IsControlKeyDown = function() return state.control_down end
     _G.IsAltKeyDown = function() return state.alt_down end
+    _G.IsFlyableArea = function() return state.is_flyable_area end
     _G.GetItemSpell = function(item_id)
         local spell = state.item_spells[item_id]
         if spell then
@@ -467,6 +469,26 @@ run_test("zone-text fallback still allows flying without C_Map", function()
     SlashCmdList["ONEBUTTONMOUNT"]("mount")
 
     assert_equal(state.last_call_companion_index, 2, "flying pool should be selected in Outland")
+end)
+
+run_test("is flyable area signal selects flying pool even without riding spell flags", function()
+    local state = setup_env({
+        mounts = {
+            { spellID = 2011, name = "Ground Mount", mountType = 0x01 },
+            { spellID = 3011, name = "Flying Mount", mountType = 0x02 },
+        },
+        db = {
+            groundMounts = { 2011 },
+            flyingMounts = { 3011 },
+        },
+        known_spells = {},
+        is_flyable_area = true,
+        c_map_enabled = false,
+    })
+
+    SlashCmdList["ONEBUTTONMOUNT"]("mount")
+
+    assert_equal(state.last_call_companion_index, 2, "flying pool should be selected when IsFlyableArea returns true")
 end)
 
 run_test("right mouse keybind maps to BUTTON2 token", function()
