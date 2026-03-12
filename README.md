@@ -2,6 +2,8 @@
 
 OneButtonMount is a World of Warcraft addon for TBC Anniversary Classic that summons a random mount from your configured rotation with one click or keybind.
 
+Current version: `1.0.8`
+
 ## Scope
 
 - Target client: TBC Anniversary Classic
@@ -11,11 +13,18 @@ OneButtonMount is a World of Warcraft addon for TBC Anniversary Classic that sum
 
 - One-button random mount summon
 - Separate ground and flying rotation pools
-- Outland flying detection with map and zone fallbacks
+- Flyable-area detection with API, map, and zone fallbacks
 - Saved pool sanitization for removed/invalid mounts
-- Configurable keybind with modifier and mouse support
+- Configurable keybind with modifier and mouse chord support (including side buttons)
 - Draggable minimap button with show/hide toggle
 - In-game configuration UI for managing pools
+- Mount source compatibility across companion, mount journal, and bag-mount item APIs
+
+## AQ40 Rules
+
+- Inside AQ40 (`Temple of Ahn'Qiraj`): only configured Qiraji Resonating Crystals are eligible
+- Outside AQ40: Qiraji crystal mounts are excluded from random selection even if configured
+- These rules apply to both manual summon (`/obm mount`) and keybind summon
 
 ## Installation
 
@@ -34,12 +43,13 @@ OneButtonMount is a World of Warcraft addon for TBC Anniversary Classic that sum
 ## Config UI
 
 - Available mounts list:
-  - Left-click: add mount to Ground pool
-  - Right-click: add mount to Flying pool
+  - Left-click adds a mount to Ground pool
+  - Right-click adds a mount to Flying pool
 - Ground/Flying rotation rows:
   - Click an icon to remove it from that pool
 - Keybind section:
   - Click "Click to Bind", press a key/mouse button, or clear it
+  - Example chord: `SHIFT-BUTTON5`
 
 ## Development
 
