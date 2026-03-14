@@ -8,7 +8,7 @@
   TBC Anniversary Classic random-mount addon with smart pool rules and reliable keybind chords.
 </p>
 
-<p align="center"><strong>Current version:</strong> <code>1.0.10</code></p>
+<p align="center"><strong>Current version:</strong> <code>1.0.11</code></p>
 
 ## Scope
 

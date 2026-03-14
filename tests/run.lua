@@ -501,11 +501,36 @@ run_test("is flyable area signal selects flying pool even without riding spell f
         known_spells = {},
         is_flyable_area = true,
         c_map_enabled = false,
+        real_zone_text = "Shattrath City",
     })
 
     SlashCmdList["ONEBUTTONMOUNT"]("mount")
 
     assert_equal(state.last_call_companion_index, 2, "flying pool should be selected when IsFlyableArea returns true")
+end)
+
+run_test("non-outland flyable-area signal does not force flying pool", function()
+    local state = setup_env({
+        mounts = {
+            { spellID = 2021, name = "Ground Mount", mountType = 0x01 },
+            { spellID = 3021, name = "Flying Mount", mountType = 0x02 },
+        },
+        db = {
+            groundMounts = { 2021 },
+            flyingMounts = { 3021 },
+        },
+        known_spells = {
+            [34090] = true,
+        },
+        is_flyable_area = true,
+        c_map_enabled = false,
+        real_zone_text = "Orgrimmar",
+        zone_text = "Orgrimmar",
+    })
+
+    SlashCmdList["ONEBUTTONMOUNT"]("mount")
+
+    assert_equal(state.last_call_companion_index, 1, "ground pool should be selected outside Outland even when IsFlyableArea returns true")
 end)
 
 run_test("aq40 only uses configured qiraji crystals", function()

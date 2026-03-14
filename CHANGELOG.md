@@ -1,5 +1,11 @@
 ## [Unreleased]
 
+## [1.0.11] - 2026-03-14
+
+### Fixed
+- Limited flying-pool selection to Outland context so false-positive `IsFlyableArea()` results no longer force flying mounts in cities like Orgrimmar
+- Added regression coverage to keep Outland flyable cities working while preventing non-Outland flyable-area misclassification
+
 ## [1.0.10] - 2026-03-12
 
 ### Fixed

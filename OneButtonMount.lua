@@ -368,22 +368,6 @@ local function ScanMounts()
 end
 
 local function CanFlyHere()
-    if IsFlyableArea then
-        local ok, flyable = pcall(IsFlyableArea)
-        if ok and flyable ~= nil then
-            return not not flyable
-        end
-    end
-
-    -- Check if player has flying riding skill
-    if IsSpellKnown then
-        local hasExpert = IsSpellKnown(EXPERT_RIDING)
-        local hasArtisan = IsSpellKnown(ARTISAN_RIDING)
-        if not hasExpert and not hasArtisan then
-            return false
-        end
-    end
-
     -- Must be outdoors and not in an instance
     if IsIndoors() then
         return false
@@ -394,55 +378,92 @@ local function CanFlyHere()
         return false
     end
 
-    -- Check if we're in an Outland zone using map IDs (locale-independent)
-    if C_Map and C_Map.GetBestMapForUnit then
-        local mapID = C_Map.GetBestMapForUnit("player")
-        if mapID then
-            -- Direct zone match
-            if OUTLAND_MAP_IDS[mapID] then
+    local function IsOutlandMapContext(mapID)
+        if not mapID then
+            return false
+        end
+
+        if OUTLAND_MAP_IDS[mapID] then
+            return true
+        end
+
+        if not (C_Map and C_Map.GetMapInfo) then
+            return false
+        end
+
+        local info = C_Map.GetMapInfo(mapID)
+        while info do
+            if info.mapID == OUTLAND_CONTINENT_MAP_ID or OUTLAND_MAP_IDS[info.mapID] then
                 return true
             end
-            -- Walk up the hierarchy to find Outland continent
-            local info = C_Map.GetMapInfo(mapID)
-            while info do
-                if info.mapID == OUTLAND_CONTINENT_MAP_ID then
+
+            local parentMapID = info.parentMapID
+            if parentMapID and parentMapID ~= 0 then
+                if parentMapID == OUTLAND_CONTINENT_MAP_ID or OUTLAND_MAP_IDS[parentMapID] then
                     return true
                 end
-                if OUTLAND_MAP_IDS[info.mapID] then
-                    return true
-                end
-                if info.parentMapID and info.parentMapID ~= 0 then
-                    if info.parentMapID == OUTLAND_CONTINENT_MAP_ID then
-                        return true
-                    end
-                    info = C_Map.GetMapInfo(info.parentMapID)
-                else
-                    break
-                end
+                info = C_Map.GetMapInfo(parentMapID)
+            else
+                break
             end
         end
+
+        return false
     end
 
-    -- Legacy fallback: some clients can resolve areaID even when C_Map is unavailable
-    if GetCurrentMapAreaID then
-        local areaID = GetCurrentMapAreaID()
-        if areaID and OUTLAND_MAP_IDS[areaID] then
+    local function IsInOutlandContext()
+        -- Prefer map hierarchy when it exists so subzones inherit the correct continent.
+        if C_Map and C_Map.GetBestMapForUnit then
+            local mapID = C_Map.GetBestMapForUnit("player")
+            if IsOutlandMapContext(mapID) then
+                return true
+            end
+        end
+
+        -- Legacy fallback: some clients can resolve areaID even when C_Map is unavailable.
+        if GetCurrentMapAreaID then
+            local areaID = GetCurrentMapAreaID()
+            if areaID and OUTLAND_MAP_IDS[areaID] then
+                return true
+            end
+        end
+
+        -- Final fallback: localized zone text.
+        local zone = GetRealZoneText and GetRealZoneText()
+        if zone and OUTLAND_ZONE_NAMES[zone] then
+            return true
+        end
+
+        local parentZone = GetZoneText and GetZoneText()
+        if parentZone and OUTLAND_ZONE_NAMES[parentZone] then
+            return true
+        end
+
+        return false
+    end
+
+    if not IsInOutlandContext() then
+        return false
+    end
+
+    if IsFlyableArea then
+        local ok, flyable = pcall(IsFlyableArea)
+        if ok and flyable then
             return true
         end
     end
 
-    -- Final fallback: localized zone text
-    local zone = GetRealZoneText and GetRealZoneText()
-    if zone and OUTLAND_ZONE_NAMES[zone] then
-        return true
+    -- Check if player has flying riding skill when the native flyable-area signal
+    -- is unavailable or inconclusive.
+    if IsSpellKnown then
+        local hasExpert = IsSpellKnown(EXPERT_RIDING)
+        local hasArtisan = IsSpellKnown(ARTISAN_RIDING)
+        if not hasExpert and not hasArtisan then
+            return false
+        end
     end
 
-    local parentZone = GetZoneText and GetZoneText()
-    if parentZone and OUTLAND_ZONE_NAMES[parentZone] then
-        return true
-    end
-
-    return false
+    return true
 end
 
 local function GetMountBySpellID(spellID)
