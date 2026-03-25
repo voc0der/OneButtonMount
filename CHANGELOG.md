@@ -1,5 +1,13 @@
 ## [Unreleased]
 
+## [1.0.12] - 2026-03-25
+
+### Added
+- Added a `Show Textual Feedback` setting next to the minimap toggle in the config UI, enabled by default
+
+### Changed
+- Routed addon status and mount-error chat messages through the new feedback setting so they can be muted without affecting explicit `/obm help` output
+
 ## [1.0.11] - 2026-03-14
 
 ### Fixed

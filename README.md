@@ -8,7 +8,7 @@
   TBC Anniversary Classic random-mount addon with smart pool rules and reliable keybind chords.
 </p>
 
-<p align="center"><strong>Current version:</strong> <code>1.0.11</code></p>
+<p align="center"><strong>Current version:</strong> <code>1.0.12</code></p>
 
 ## Scope
 
@@ -23,6 +23,7 @@
 - Saved pool sanitization for removed/invalid mounts
 - Configurable keybind with modifier and mouse chord support (including side buttons)
 - Draggable minimap button with show/hide toggle
+- Optional textual feedback toggle for addon chat/status messages
 - In-game configuration UI for managing pools
 - Mount source compatibility across companion, mount journal, and bag-mount item APIs
 

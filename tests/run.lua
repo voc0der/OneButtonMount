@@ -164,6 +164,7 @@ local function setup_env(opts)
         function frame:SetScrollChild(child) self.scroll_child = child end
         function frame:SetText(text) self.text = text end
         function frame:SetChecked(value) self.checked = value end
+        function frame:GetChecked() return self.checked end
         function frame:Hide() self.shown = false end
         function frame:Show() self.shown = true end
         function frame:IsShown() return self.shown end
@@ -646,6 +647,61 @@ run_test("right mouse keybind maps to BUTTON2 token", function()
     assert_equal(last_binding.key, "BUTTON2", "right-click bind token should be BUTTON2")
     assert_equal(last_binding.is_priority, true, "binding override should use priority")
     assert_equal(last_binding.mouse_button, "LeftButton", "binding click should target left button explicitly")
+end)
+
+run_test("textual feedback defaults to enabled and can be toggled from config", function()
+    setup_env({
+        mounts = {
+            { spellID = 4201, name = "Test Mount", mountType = 0x01 },
+        },
+        db = {},
+    })
+
+    assert_equal(OneButtonMountDB.showTextualFeedback, true, "textual feedback should default to enabled")
+
+    SlashCmdList["ONEBUTTONMOUNT"]("")
+
+    local config_frame = _G.OneButtonMountConfigFrame
+    assert_true(config_frame ~= nil, "config frame not created")
+    assert_true(config_frame.textualFeedbackCheckbox ~= nil, "textual feedback checkbox missing")
+    assert_equal(config_frame.textualFeedbackCheckbox:GetChecked(), true, "textual feedback checkbox should default checked")
+
+    config_frame.textualFeedbackCheckbox:SetChecked(false)
+    config_frame.textualFeedbackCheckbox.scripts["OnClick"](config_frame.textualFeedbackCheckbox)
+
+    assert_equal(OneButtonMountDB.showTextualFeedback, false, "textual feedback checkbox should update saved state")
+end)
+
+run_test("disabled textual feedback suppresses addon feedback but not explicit help", function()
+    local state = setup_env({
+        mounts = {
+            { spellID = 4301, name = "Muted Mount", mountType = 0x01 },
+        },
+        indoors = true,
+        db = {
+            groundMounts = { 4301 },
+            showTextualFeedback = false,
+        },
+        c_map_enabled = false,
+    })
+
+    assert_equal(#state.chat, 0, "load feedback should be muted when disabled")
+
+    SlashCmdList["ONEBUTTONMOUNT"]("mount")
+    SlashCmdList["ONEBUTTONMOUNT"]("minimap")
+
+    assert_equal(#state.chat, 0, "mount and status feedback should be muted when disabled")
+
+    SlashCmdList["ONEBUTTONMOUNT"]("help")
+
+    local found_help = false
+    for _, line in ipairs(state.chat) do
+        if string.find(line, "Commands:", 1, true) then
+            found_help = true
+            break
+        end
+    end
+    assert_true(found_help, "explicit help output should still be shown")
 end)
 
 run_test("shift plus button5 keybind is captured as SHIFT-BUTTON5", function()

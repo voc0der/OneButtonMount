@@ -72,6 +72,20 @@ local function Print(msg)
     DEFAULT_CHAT_FRAME:AddMessage("|cff33ccff[OneButtonMount]|r " .. msg)
 end
 
+local function ShowTextualFeedback()
+    if not OneButtonMountDB or OneButtonMountDB.showTextualFeedback == nil then
+        return true
+    end
+
+    return OneButtonMountDB.showTextualFeedback
+end
+
+local function Feedback(msg)
+    if ShowTextualFeedback() then
+        Print(msg)
+    end
+end
+
 local function TableContains(tbl, value)
     for _, v in ipairs(tbl) do
         if v == value then return true end
@@ -642,7 +656,7 @@ end
 
 local function SummonRandomMount()
     if InCombatLockdown() then
-        Print("Cannot mount in combat.")
+        Feedback("Cannot mount in combat.")
         return
     end
 
@@ -653,7 +667,7 @@ local function SummonRandomMount()
 
     local inAQ40 = IsInAQ40()
     if IsIndoors() and not inAQ40 then
-        Print("Cannot mount indoors.")
+        Feedback("Cannot mount indoors.")
         return
     end
 
@@ -662,7 +676,7 @@ local function SummonRandomMount()
 
     local pool, poolError = BuildEligibleMountPool()
     if not pool or #pool == 0 then
-        Print(poolError or "No mounts in your rotation! Open the config with /onebuttonmount")
+        Feedback(poolError or "No mounts in your rotation! Open the config with /onebuttonmount")
         return
     end
 
@@ -724,7 +738,7 @@ end
 
 local function SetMountKeybind(key)
     if InCombatLockdown() then
-        Print("Cannot change keybind in combat.")
+        Feedback("Cannot change keybind in combat.")
         return
     end
 
@@ -736,10 +750,10 @@ local function SetMountKeybind(key)
     if key then
         SetOverrideBindingClick(bindingFrame, true, key, "OneButtonMountBindingButton", "LeftButton")
         OneButtonMountDB.keybind = key
-        Print("Mount key bound to: " .. key)
+        Feedback("Mount key bound to: " .. key)
     else
         OneButtonMountDB.keybind = nil
-        Print("Mount keybind cleared.")
+        Feedback("Mount keybind cleared.")
     end
 end
 
@@ -758,14 +772,14 @@ bindingFrame:SetScript("PreClick", function(self, button)
     local inAQ40 = IsInAQ40()
     if IsIndoors() and not inAQ40 then
         self:SetAttribute("macrotext", "")
-        Print("Cannot mount indoors.")
+        Feedback("Cannot mount indoors.")
         return
     end
 
     local pool, poolError = BuildEligibleMountPool()
     if not pool or #pool == 0 then
         self:SetAttribute("macrotext", "")
-        Print(poolError or "No mounts in rotation!")
+        Feedback(poolError or "No mounts in rotation!")
         return
     end
 
@@ -889,12 +903,12 @@ function OneButtonMount:ToggleMinimapButton()
         end
         minimapButton:Show()
         OneButtonMount:UpdateMinimapButtonPosition()
-        Print("Minimap button shown.")
+        Feedback("Minimap button shown.")
     else
         if minimapButton then
             minimapButton:Hide()
         end
-        Print("Minimap button hidden. Use /onebuttonmount minimap to show it again.")
+        Feedback("Minimap button hidden. Use /onebuttonmount minimap to show it again.")
     end
     -- Update checkbox if config is open
     if configFrame and configFrame.minimapCheckbox then
@@ -985,7 +999,7 @@ local function CreateMountIcon(parent, mountData, pool, index)
                 end
             elseif button == "RightButton" then
                 if self.mountData.canDetermineFlying and not self.mountData.isFlying then
-                    Print((self.mountData.name or "This mount") .. " cannot be added to flying rotation.")
+                    Feedback((self.mountData.name or "This mount") .. " cannot be added to flying rotation.")
                     return
                 end
                 if not TableContains(OneButtonMountDB.flyingMounts, self.mountData.spellID) then
@@ -1183,6 +1197,20 @@ function OneButtonMount:CreateConfigUI()
         OneButtonMount:ToggleMinimapButton()
     end)
 
+    local textualFeedbackCheck = CreateFrame("CheckButton", nil, configFrame, "UICheckButtonTemplate")
+    textualFeedbackCheck:SetPoint("LEFT", minimapCheckLabel, "RIGHT", 24, 0)
+    textualFeedbackCheck:SetChecked(ShowTextualFeedback())
+    configFrame.textualFeedbackCheckbox = textualFeedbackCheck
+    ApplyElvUISkin(textualFeedbackCheck, "checkbox")
+
+    local textualFeedbackLabel = configFrame:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+    textualFeedbackLabel:SetPoint("LEFT", textualFeedbackCheck, "RIGHT", 2, 0)
+    textualFeedbackLabel:SetText("Show Textual Feedback")
+
+    textualFeedbackCheck:SetScript("OnClick", function(self)
+        OneButtonMountDB.showTextualFeedback = self:GetChecked() and true or false
+    end)
+
     yOffset = yOffset - 35
 
     -- ========================================================================
@@ -1239,6 +1267,13 @@ function OneButtonMount:RefreshConfigUI()
 
     ScanMounts()
     SanitizeSavedMountPools()
+
+    if configFrame.minimapCheckbox then
+        configFrame.minimapCheckbox:SetChecked(OneButtonMountDB.minimapButton.show)
+    end
+    if configFrame.textualFeedbackCheckbox then
+        configFrame.textualFeedbackCheckbox:SetChecked(ShowTextualFeedback())
+    end
 
     -- Refresh ground pool
     local gc = configFrame.groundContainer
@@ -1308,7 +1343,7 @@ function OneButtonMount:RefreshConfigUI()
     fc:SetHeight(math.max(44, rows * rowHeight + 8))
 
     -- Reposition sections based on dynamic heights
-    local yOffset = -35 - 35 - 35 -- keybind + minimap checkbox
+    local yOffset = -35 - 35 - 35 -- keybind + settings row
 
     configFrame.groundLabel:ClearAllPoints()
     configFrame.groundLabel:SetPoint("TOPLEFT", configFrame, "TOPLEFT", 15, yOffset)
@@ -1427,6 +1462,9 @@ function OneButtonMount:InitDB()
     if not OneButtonMountDB.minimapButton.position then
         OneButtonMountDB.minimapButton.position = 220
     end
+    if OneButtonMountDB.showTextualFeedback == nil then
+        OneButtonMountDB.showTextualFeedback = true
+    end
 end
 
 -- ============================================================================
@@ -1487,7 +1525,7 @@ eventFrame:SetScript("OnEvent", function(self, event, arg1, ...)
             OneButtonMount:UpdateMinimapButtonPosition()
         end
 
-        Print("Loaded! Type /onebuttonmount or /obm to configure.")
+        Feedback("Loaded! Type /onebuttonmount or /obm to configure.")
 
     elseif event == "PLAYER_ENTERING_WORLD" then
         -- Restore keybind after loading screens
