@@ -33,8 +33,8 @@ Before automated release can work end-to-end, configure:
 ### Troubleshooting
 
 - No new tag created:
-  - Check `## Version:` in `OneButtonMount.toc` is bumped (for example `1.0.1`)
-  - If tag already exists (for example `v1.0.1`), workflow will skip by design
+  - Check `## Version:` in `OneButtonMount.toc` is bumped (for example `1.0.14`)
+  - If tag already exists (for example `v1.0.14`), workflow will skip by design
 - Tag created but no release upload:
   - Confirm `CF_API_KEY` exists in repo secrets
   - Confirm `## X-Curse-Project-ID:` is set to a valid numeric project ID
@@ -53,9 +53,12 @@ Before automated release can work end-to-end, configure:
 
 ## What Gets Released
 
-The `.pkgmeta` file controls what gets included:
-- OneButtonMount.lua
-- OneButtonMount.toc
-- CHANGELOG.md
-- README.md (excluded)
-- .git files (excluded)
+Only runtime addon files should ship to players.
+
+The PR package workflow stages files directly from `OneButtonMount.toc`, and the release workflow verifies that `.pkgmeta` produces the same runtime-only tree before uploading to GitHub and CurseForge.
+
+For the current addon, the packaged game files are:
+- `OneButtonMount.toc`
+- `OneButtonMount.lua`
+
+Non-game files such as `assets/`, `tests/`, docs, and repo metadata must stay out of the final addon archive.
