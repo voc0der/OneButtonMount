@@ -1,5 +1,10 @@
 ## [Unreleased]
 
+## [1.0.13] - 2026-03-26
+
+### Fixed
+- Added `## X-Curse-Project-ID: 1484391` to addon metadata so automated CurseForge packaging can upload releases to the correct project
+
 ## [1.0.12] - 2026-03-25
 
 ### Added
