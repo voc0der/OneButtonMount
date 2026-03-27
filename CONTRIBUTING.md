@@ -42,6 +42,7 @@ bash ./.github/scripts/verify-release-package.sh
 - Use conventional commit titles such as `feat(...)`, `fix(...)`, `docs(...)`, or `ci(...)`.
 - Include a short summary of what changed and how you verified it.
 - If the change affects game UI, include screenshots or a brief description of the visible behavior.
+- Add the `build` label when you want the PR package workflow to post a downloadable addon zip artifact on the PR.
 - Keep PRs scoped to one logical change when possible.
 
 ## Releases

@@ -1,5 +1,14 @@
 ## [Unreleased]
 
+## [1.0.16] - 2026-03-27
+
+### Added
+- Saved mount rotations, keybinds, minimap settings, config window position, and textual feedback preferences per character
+
+### Changed
+- Added one-time migration from the previous account-wide saved settings into each character profile without overwriting characters that already have profile data
+- Expanded regression coverage for per-character storage, legacy migration, and per-character UI preferences
+
 ## [1.0.15] - 2026-03-27
 
 ### Fixed

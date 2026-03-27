@@ -56,6 +56,8 @@ local function setup_env(opts)
         num_slots_mode = opts.num_slots_mode,
         strict_tonumber = opts.strict_tonumber or false,
         is_flyable_area = opts.is_flyable_area,
+        player_name = opts.player_name or "TestPlayer",
+        realm_name = opts.realm_name or "TestRealm",
     }
 
     _G.unpack = table.unpack
@@ -213,6 +215,7 @@ local function setup_env(opts)
         },
     }
     _G.OneButtonMountDB = copy_table(opts.db or {})
+    _G.OneButtonMountCharDB = copy_table(opts.char_db)
 
     _G.InCombatLockdown = function() return state.in_combat end
     _G.IsMounted = function() return state.mounted end
@@ -306,6 +309,21 @@ local function setup_env(opts)
     _G.IsControlKeyDown = function() return state.control_down end
     _G.IsAltKeyDown = function() return state.alt_down end
     _G.IsFlyableArea = function() return state.is_flyable_area end
+    _G.UnitFullName = function(unit)
+        if unit == "player" then
+            return state.player_name, state.realm_name
+        end
+        return nil
+    end
+    _G.UnitName = function(unit)
+        if unit == "player" then
+            return state.player_name
+        end
+        return nil
+    end
+    _G.GetRealmName = function()
+        return state.realm_name
+    end
     _G.GetItemSpell = function(item_id)
         local spell = state.item_spells[item_id]
         if spell then
@@ -461,9 +479,9 @@ run_test("stale mount IDs are pruned before summoning", function()
 
     SlashCmdList["ONEBUTTONMOUNT"]("mount")
 
-    assert_equal(#OneButtonMountDB.groundMounts, 1, "ground pool should be sanitized")
-    assert_equal(OneButtonMountDB.groundMounts[1], 1001, "valid ground mount should remain")
-    assert_equal(#OneButtonMountDB.flyingMounts, 0, "invalid flying mount should be removed")
+    assert_equal(#OneButtonMountCharDB.groundMounts, 1, "ground pool should be sanitized")
+    assert_equal(OneButtonMountCharDB.groundMounts[1], 1001, "valid ground mount should remain")
+    assert_equal(#OneButtonMountCharDB.flyingMounts, 0, "invalid flying mount should be removed")
     assert_equal(state.last_call_companion_index, 1, "valid mount should be summoned")
 end)
 
@@ -694,6 +712,8 @@ run_test("right mouse keybind maps to BUTTON2 token", function()
     assert_equal(last_binding.key, "BUTTON2", "right-click bind token should be BUTTON2")
     assert_equal(last_binding.is_priority, true, "binding override should use priority")
     assert_equal(last_binding.mouse_button, "LeftButton", "binding click should target left button explicitly")
+    assert_equal(OneButtonMountCharDB.keybind, "BUTTON2", "keybind should be saved per character")
+    assert_equal(OneButtonMountDB.keybind, nil, "legacy account-wide keybind should remain unused")
 end)
 
 run_test("textual feedback defaults to enabled and can be toggled from config", function()
@@ -704,7 +724,7 @@ run_test("textual feedback defaults to enabled and can be toggled from config", 
         db = {},
     })
 
-    assert_equal(OneButtonMountDB.showTextualFeedback, true, "textual feedback should default to enabled")
+    assert_equal(OneButtonMountCharDB.showTextualFeedback, true, "textual feedback should default to enabled")
 
     SlashCmdList["ONEBUTTONMOUNT"]("")
 
@@ -716,7 +736,7 @@ run_test("textual feedback defaults to enabled and can be toggled from config", 
     config_frame.textualFeedbackCheckbox:SetChecked(false)
     config_frame.textualFeedbackCheckbox.scripts["OnClick"](config_frame.textualFeedbackCheckbox)
 
-    assert_equal(OneButtonMountDB.showTextualFeedback, false, "textual feedback checkbox should update saved state")
+    assert_equal(OneButtonMountCharDB.showTextualFeedback, false, "textual feedback checkbox should update saved state")
 end)
 
 run_test("disabled textual feedback suppresses addon feedback but not explicit help", function()
@@ -725,7 +745,7 @@ run_test("disabled textual feedback suppresses addon feedback but not explicit h
             { spellID = 4301, name = "Muted Mount", mountType = 0x01 },
         },
         indoors = true,
-        db = {
+        char_db = {
             groundMounts = { 4301 },
             showTextualFeedback = false,
         },
@@ -778,6 +798,7 @@ run_test("shift plus button5 keybind is captured as SHIFT-BUTTON5", function()
     assert_equal(last_binding.key, "SHIFT-BUTTON5", "shift+button5 should be stored as SHIFT-BUTTON5")
     assert_equal(last_binding.is_priority, true, "binding override should use priority")
     assert_equal(last_binding.mouse_button, "LeftButton", "binding click should target left button explicitly")
+    assert_equal(OneButtonMountCharDB.keybind, "SHIFT-BUTTON5", "shift+button5 should be saved per character")
 end)
 
 run_test("binding button accepts key down and key up clicks", function()
@@ -934,7 +955,7 @@ run_test("non-flying mounts cannot be added to flying rotation", function()
 
     ground_button.scripts["OnClick"](ground_button, "RightButton")
 
-    assert_equal(#OneButtonMountDB.flyingMounts, 0, "ground-only mount should not enter flying pool")
+    assert_equal(#OneButtonMountCharDB.flyingMounts, 0, "ground-only mount should not enter flying pool")
 
     local found_message = false
     for _, line in ipairs(state.chat) do
@@ -973,8 +994,8 @@ run_test("unknown companion mount type can still be added to flying rotation", f
     assert_true(unknown_type_button ~= nil, "unknown type mount button not found")
 
     unknown_type_button.scripts["OnClick"](unknown_type_button, "RightButton")
-    assert_equal(#OneButtonMountDB.flyingMounts, 1, "unknown type mount should be allowed into flying pool")
-    assert_equal(OneButtonMountDB.flyingMounts[1], 5002, "expected unknown type mount spellID in flying pool")
+    assert_equal(#OneButtonMountCharDB.flyingMounts, 1, "unknown type mount should be allowed into flying pool")
+    assert_equal(OneButtonMountCharDB.flyingMounts[1], 5002, "expected unknown type mount spellID in flying pool")
 end)
 
 run_test("nil companion count on addon load does not crash", function()
@@ -990,7 +1011,7 @@ run_test("nil companion count on addon load does not crash", function()
     })
 
     assert_true(type(state.chat) == "table", "addon should finish loading without runtime error")
-    assert_equal(#OneButtonMountDB.groundMounts, 1, "existing pool should remain intact when count is nil")
+    assert_equal(#OneButtonMountCharDB.groundMounts, 1, "existing pool should remain intact when count is nil")
 end)
 
 run_test("empty-return companion count on addon load does not crash", function()
@@ -1006,7 +1027,7 @@ run_test("empty-return companion count on addon load does not crash", function()
     })
 
     assert_true(type(state.chat) == "table", "addon should finish loading without runtime error")
-    assert_equal(#OneButtonMountDB.groundMounts, 1, "existing pool should remain intact when count has no return values")
+    assert_equal(#OneButtonMountCharDB.groundMounts, 1, "existing pool should remain intact when count has no return values")
 end)
 
 run_test("strict tonumber mode does not crash on nil companion and bag slot values", function()
@@ -1021,6 +1042,164 @@ run_test("strict tonumber mode does not crash on nil companion and bag slot valu
     })
 
     assert_true(type(state.chat) == "table", "addon should finish loading under strict tonumber behavior")
+end)
+
+run_test("legacy global mount pools migrate into the per-character profile", function()
+    setup_env({
+        mounts = {
+            { spellID = 8101, name = "Legacy Ground", mountType = 0x01 },
+            { spellID = 8102, name = "Legacy Flying", mountType = 0x02 },
+        },
+        db = {
+            groundMounts = { 8101 },
+            flyingMounts = { 8102 },
+            keybind = "CTRL-F",
+            minimapButton = {
+                show = false,
+                position = 135,
+            },
+            configPosition = {
+                point = "TOP",
+                relativePoint = "TOP",
+                xOfs = 12,
+                yOfs = -34,
+            },
+            showTextualFeedback = false,
+        },
+    })
+
+    assert_equal(#OneButtonMountCharDB.groundMounts, 1, "legacy ground pool should migrate to character storage")
+    assert_equal(OneButtonMountCharDB.groundMounts[1], 8101, "legacy ground mount should be copied into character storage")
+    assert_equal(#OneButtonMountCharDB.flyingMounts, 1, "legacy flying pool should migrate to character storage")
+    assert_equal(OneButtonMountCharDB.flyingMounts[1], 8102, "legacy flying mount should be copied into character storage")
+    assert_equal(OneButtonMountCharDB.keybind, "CTRL-F", "legacy keybind should migrate to character storage")
+    assert_equal(OneButtonMountCharDB.minimapButton.show, false, "legacy minimap visibility should migrate to character storage")
+    assert_equal(OneButtonMountCharDB.minimapButton.position, 135, "legacy minimap position should migrate to character storage")
+    assert_equal(OneButtonMountCharDB.configPosition.xOfs, 12, "legacy config position should migrate to character storage")
+    assert_equal(OneButtonMountCharDB.showTextualFeedback, false, "legacy textual feedback setting should migrate to character storage")
+    assert_equal(OneButtonMountCharDB.profileVersion, 2, "character profile version should be updated after migration")
+end)
+
+run_test("current character profile does not get overwritten by legacy account settings", function()
+    setup_env({
+        db = {
+            groundMounts = { 8201 },
+            flyingMounts = { 8202 },
+            keybind = "CTRL-G",
+            minimapButton = {
+                show = true,
+                position = 180,
+            },
+            configPosition = {
+                point = "BOTTOM",
+                relativePoint = "BOTTOM",
+                xOfs = 50,
+                yOfs = 25,
+            },
+            showTextualFeedback = true,
+        },
+        char_db = {
+            groundMounts = {},
+            flyingMounts = {},
+            keybind = "ALT-F",
+            minimapButton = {
+                show = false,
+                position = 45,
+            },
+            configPosition = {
+                point = "LEFT",
+                relativePoint = "LEFT",
+                xOfs = -15,
+                yOfs = 5,
+            },
+            showTextualFeedback = false,
+            profileVersion = 2,
+        },
+    })
+
+    assert_equal(#OneButtonMountCharDB.groundMounts, 0, "empty character ground pool should stay empty after migration")
+    assert_equal(#OneButtonMountCharDB.flyingMounts, 0, "empty character flying pool should stay empty after migration")
+    assert_equal(OneButtonMountCharDB.keybind, "ALT-F", "character keybind should win over legacy account data")
+    assert_equal(OneButtonMountCharDB.minimapButton.show, false, "character minimap visibility should win over legacy account data")
+    assert_equal(OneButtonMountCharDB.minimapButton.position, 45, "character minimap position should win over legacy account data")
+    assert_equal(OneButtonMountCharDB.configPosition.xOfs, -15, "character config position should win over legacy account data")
+    assert_equal(OneButtonMountCharDB.showTextualFeedback, false, "character textual feedback should win over legacy account data")
+end)
+
+run_test("config updates character rotations without overwriting account settings", function()
+    setup_env({
+        mounts = {
+            { spellID = 8301, name = "Fresh Mount", mountType = 0x01 },
+        },
+        db = {
+            groundMounts = { 9999 },
+            showTextualFeedback = false,
+        },
+        char_db = {
+            groundMounts = {},
+            flyingMounts = {},
+        },
+    })
+
+    SlashCmdList["ONEBUTTONMOUNT"]("")
+
+    local config_frame = _G.OneButtonMountConfigFrame
+    assert_true(config_frame ~= nil, "config frame not created")
+
+    local available_button
+    for _, button in ipairs(config_frame.mountButtons) do
+        if button.mountData and button.mountData.spellID == 8301 and not button.pool then
+            available_button = button
+            break
+        end
+    end
+    assert_true(available_button ~= nil, "available mount button not found")
+
+    available_button.scripts["OnClick"](available_button, "LeftButton")
+
+    assert_equal(#OneButtonMountCharDB.groundMounts, 1, "new mount should be stored in the character profile")
+    assert_equal(OneButtonMountCharDB.groundMounts[1], 8301, "character profile should receive the selected mount")
+    assert_equal(OneButtonMountDB.groundMounts[1], 9999, "legacy account-wide pool should not be overwritten by character edits")
+    assert_equal(OneButtonMountDB.showTextualFeedback, false, "shared account setting should remain untouched")
+end)
+
+run_test("minimap visibility is stored per character", function()
+    setup_env({
+        char_db = {
+            minimapButton = {
+                show = true,
+                position = 220,
+            },
+            profileVersion = 2,
+        },
+    })
+
+    SlashCmdList["ONEBUTTONMOUNT"]("minimap")
+
+    assert_equal(OneButtonMountCharDB.minimapButton.show, false, "minimap visibility should be stored per character")
+    assert_equal(OneButtonMountDB.minimapButton, nil, "legacy account-wide minimap state should remain unused")
+end)
+
+run_test("config window position is stored per character", function()
+    setup_env({
+        mounts = {
+            { spellID = 8401, name = "Position Test Mount", mountType = 0x01 },
+        },
+        char_db = {
+            profileVersion = 2,
+        },
+    })
+
+    SlashCmdList["ONEBUTTONMOUNT"]("")
+
+    local config_frame = _G.OneButtonMountConfigFrame
+    assert_true(config_frame ~= nil, "config frame not created")
+
+    config_frame.scripts["OnDragStop"](config_frame)
+
+    assert_true(type(OneButtonMountCharDB.configPosition) == "table", "config position should be stored per character")
+    assert_equal(OneButtonMountCharDB.configPosition.point, "CENTER", "config position point should be saved")
+    assert_equal(OneButtonMountDB.configPosition, nil, "legacy account-wide config position should remain unused")
 end)
 
 print(string.format("Ran %d tests, %d failures", total, failures))

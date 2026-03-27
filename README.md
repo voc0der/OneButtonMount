@@ -7,8 +7,9 @@
 - Summons a random mount from one button using your saved rotation
 - Keeps separate ground and flying pools with zone-aware selection
 - Supports direct keybind and mouse-chord summoning from the addon settings
+- Stores mount rotations and addon settings per character
 
-Current version: `1.0.15`
+Current version: `1.0.16`
 
 ## Config UI
 
@@ -28,6 +29,7 @@ Current version: `1.0.15`
 - Configurable keybinds with modifier and mouse button chords, including side buttons
 - Draggable minimap button with a show/hide toggle
 - Optional textual feedback toggle for addon chat output
+- Per-character settings so alts keep their own rotations, keybinds, and UI preferences
 
 ## Install
 

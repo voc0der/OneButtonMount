@@ -30,6 +30,10 @@ Before automated release can work end-to-end, configure:
 3. Commit and push to `main`
 4. CI automatically creates a tag from the TOC version and triggers the packager
 
+### PR Build Artifacts
+
+- Add the `build` label to a pull request when you want the PR packaging workflows to post a downloadable addon zip artifact comment for that PR head commit.
+
 ### Troubleshooting
 
 - No new tag created:
