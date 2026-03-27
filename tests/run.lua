@@ -489,6 +489,28 @@ run_test("zone-text fallback still allows flying without C_Map", function()
     assert_equal(state.last_call_companion_index, 2, "flying pool should be selected in Outland")
 end)
 
+run_test("area-id fallback still allows flying when zone text is unavailable", function()
+    local state = setup_env({
+        mounts = {
+            { spellID = 2002, name = "Ground Mount", mountType = 0x01 },
+            { spellID = 3002, name = "Flying Mount", mountType = 0x02 },
+        },
+        db = {
+            groundMounts = { 2002 },
+            flyingMounts = { 3002 },
+        },
+        known_spells = {
+            [34090] = true,
+        },
+        c_map_enabled = false,
+        current_map_area_id = 111,
+    })
+
+    SlashCmdList["ONEBUTTONMOUNT"]("mount")
+
+    assert_equal(state.last_call_companion_index, 2, "area-id fallback should still select the flying pool when zone text is unavailable")
+end)
+
 run_test("is flyable area signal selects flying pool even without riding spell flags", function()
     local state = setup_env({
         mounts = {
@@ -532,6 +554,31 @@ run_test("non-outland flyable-area signal does not force flying pool", function(
     SlashCmdList["ONEBUTTONMOUNT"]("mount")
 
     assert_equal(state.last_call_companion_index, 1, "ground pool should be selected outside Outland even when IsFlyableArea returns true")
+end)
+
+run_test("zone text beats stale outland area IDs outside outland", function()
+    local state = setup_env({
+        mounts = {
+            { spellID = 2031, name = "Ground Mount", mountType = 0x01 },
+            { spellID = 3031, name = "Flying Mount", mountType = 0x02 },
+        },
+        db = {
+            groundMounts = { 2031 },
+            flyingMounts = { 3031 },
+        },
+        known_spells = {
+            [34090] = true,
+        },
+        c_map_enabled = false,
+        current_map_area_id = 111,
+        real_zone_text = "Stormwind City",
+        zone_text = "Stormwind City",
+        is_flyable_area = false,
+    })
+
+    SlashCmdList["ONEBUTTONMOUNT"]("mount")
+
+    assert_equal(state.last_call_companion_index, 1, "ground pool should be selected when zone text says Stormwind even if area ID is stale")
 end)
 
 run_test("aq40 only uses configured qiraji crystals", function()
