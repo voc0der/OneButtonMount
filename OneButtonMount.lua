@@ -38,6 +38,7 @@ local OUTLAND_ZONE_NAMES = {
 -- Flying riding skill spell IDs
 local EXPERT_RIDING = 34090
 local ARTISAN_RIDING = 34091
+local CHARACTER_PROFILE_VERSION = 2
 
 -- Mount type flags from GetCompanionInfo's 6th return value
 -- Bitmask: 0x01 = ground, 0x02 = flying, 0x10 = underwater
@@ -72,12 +73,15 @@ local function Print(msg)
     DEFAULT_CHAT_FRAME:AddMessage("|cff33ccff[OneButtonMount]|r " .. msg)
 end
 
+local GetCharacterDB
+
 local function ShowTextualFeedback()
-    if not OneButtonMountDB or OneButtonMountDB.showTextualFeedback == nil then
+    local characterDB = GetCharacterDB()
+    if characterDB.showTextualFeedback == nil then
         return true
     end
 
-    return OneButtonMountDB.showTextualFeedback
+    return characterDB.showTextualFeedback
 end
 
 local function Feedback(msg)
@@ -101,6 +105,57 @@ local function TableRemove(tbl, value)
         end
     end
     return false
+end
+
+local function CopyValue(source)
+    if type(source) ~= "table" then
+        return source
+    end
+
+    local copy = {}
+    for key, value in pairs(source) do
+        copy[key] = CopyValue(value)
+    end
+
+    return copy
+end
+
+GetCharacterDB = function()
+    if type(OneButtonMountCharDB) ~= "table" then
+        OneButtonMountCharDB = {}
+    end
+
+    return OneButtonMountCharDB
+end
+
+local function GetMountPools()
+    local characterDB = GetCharacterDB()
+
+    if type(characterDB.groundMounts) ~= "table" then
+        characterDB.groundMounts = {}
+    end
+
+    if type(characterDB.flyingMounts) ~= "table" then
+        characterDB.flyingMounts = {}
+    end
+
+    return characterDB.groundMounts, characterDB.flyingMounts
+end
+
+local function GetMinimapSettings()
+    local characterDB = GetCharacterDB()
+
+    if type(characterDB.minimapButton) ~= "table" then
+        characterDB.minimapButton = {}
+    end
+    if characterDB.minimapButton.show == nil then
+        characterDB.minimapButton.show = true
+    end
+    if not characterDB.minimapButton.position then
+        characterDB.minimapButton.position = 220
+    end
+
+    return characterDB.minimapButton
 end
 
 -- ============================================================================
@@ -548,8 +603,7 @@ local function IsAQ40CrystalMount(mount)
 end
 
 local function BuildEligibleMountPool()
-    local flyingMounts = OneButtonMountDB.flyingMounts or {}
-    local groundMounts = OneButtonMountDB.groundMounts or {}
+    local groundMounts, flyingMounts = GetMountPools()
 
     local function FilterPool(sourcePool, includeAQ40Crystals)
         local filtered = {}
@@ -640,18 +694,15 @@ local function SanitizePool(pool, requireFlying, mountLookup)
 end
 
 local function SanitizeSavedMountPools()
-    if not OneButtonMountDB then return end
-
-    OneButtonMountDB.groundMounts = OneButtonMountDB.groundMounts or {}
-    OneButtonMountDB.flyingMounts = OneButtonMountDB.flyingMounts or {}
+    local characterDB = GetCharacterDB()
 
     local mountLookup = BuildMountLookup()
     if not next(mountLookup) then
         return
     end
 
-    OneButtonMountDB.groundMounts = SanitizePool(OneButtonMountDB.groundMounts, false, mountLookup)
-    OneButtonMountDB.flyingMounts = SanitizePool(OneButtonMountDB.flyingMounts, true, mountLookup)
+    characterDB.groundMounts = SanitizePool(characterDB.groundMounts, false, mountLookup)
+    characterDB.flyingMounts = SanitizePool(characterDB.flyingMounts, true, mountLookup)
 end
 
 -- ============================================================================
@@ -741,22 +792,24 @@ local function NormalizeMouseBindingToken(button)
 end
 
 local function SetMountKeybind(key)
+    local characterDB = GetCharacterDB()
+
     if InCombatLockdown() then
         Feedback("Cannot change keybind in combat.")
         return
     end
 
     -- Clear old keybind
-    if OneButtonMountDB.keybind then
-        SetOverrideBinding(bindingFrame, true, OneButtonMountDB.keybind, nil)
+    if characterDB.keybind then
+        SetOverrideBinding(bindingFrame, true, characterDB.keybind, nil)
     end
 
     if key then
         SetOverrideBindingClick(bindingFrame, true, key, "OneButtonMountBindingButton", "LeftButton")
-        OneButtonMountDB.keybind = key
+        characterDB.keybind = key
         Feedback("Mount key bound to: " .. key)
     else
-        OneButtonMountDB.keybind = nil
+        characterDB.keybind = nil
         Feedback("Mount keybind cleared.")
     end
 end
@@ -803,9 +856,11 @@ bindingFrame:SetScript("PreClick", function(self, button)
 end)
 
 local function RestoreKeybind()
+    local characterDB = GetCharacterDB()
+
     if InCombatLockdown() then return end
-    if OneButtonMountDB and OneButtonMountDB.keybind then
-        SetOverrideBindingClick(bindingFrame, true, OneButtonMountDB.keybind, "OneButtonMountBindingButton", "LeftButton")
+    if characterDB.keybind then
+        SetOverrideBindingClick(bindingFrame, true, characterDB.keybind, "OneButtonMountBindingButton", "LeftButton")
     end
 end
 
@@ -866,32 +921,36 @@ local function CreateMinimapButton()
     end)
 
     minimapButton:SetScript("OnDragStop", function(self)
+        local minimapSettings = GetMinimapSettings()
         self.dragging = false
         local mx, my = Minimap:GetCenter()
         local px, py = GetCursorPosition()
         local scale = Minimap:GetEffectiveScale()
         px, py = px / scale, py / scale
         local angle = math.deg(math.atan2(py - my, px - mx))
-        OneButtonMountDB.minimapButton.position = angle
+        minimapSettings.position = angle
         OneButtonMount:UpdateMinimapButtonPosition()
     end)
 
     minimapButton:SetScript("OnUpdate", function(self)
         if self.dragging then
+            local minimapSettings = GetMinimapSettings()
             local mx, my = Minimap:GetCenter()
             local px, py = GetCursorPosition()
             local scale = Minimap:GetEffectiveScale()
             px, py = px / scale, py / scale
             local angle = math.deg(math.atan2(py - my, px - mx))
-            OneButtonMountDB.minimapButton.position = angle
+            minimapSettings.position = angle
             OneButtonMount:UpdateMinimapButtonPosition()
         end
     end)
 end
 
 function OneButtonMount:UpdateMinimapButtonPosition()
+    local minimapSettings = GetMinimapSettings()
+
     if not minimapButton then return end
-    local angle = math.rad(OneButtonMountDB.minimapButton.position or 220)
+    local angle = math.rad(minimapSettings.position or 220)
     local radius = 80
     local x = math.cos(angle) * radius
     local y = math.sin(angle) * radius
@@ -900,8 +959,10 @@ function OneButtonMount:UpdateMinimapButtonPosition()
 end
 
 function OneButtonMount:ToggleMinimapButton()
-    OneButtonMountDB.minimapButton.show = not OneButtonMountDB.minimapButton.show
-    if OneButtonMountDB.minimapButton.show then
+    local minimapSettings = GetMinimapSettings()
+
+    minimapSettings.show = not minimapSettings.show
+    if minimapSettings.show then
         if not minimapButton then
             CreateMinimapButton()
         end
@@ -916,7 +977,7 @@ function OneButtonMount:ToggleMinimapButton()
     end
     -- Update checkbox if config is open
     if configFrame and configFrame.minimapCheckbox then
-        configFrame.minimapCheckbox:SetChecked(OneButtonMountDB.minimapButton.show)
+        configFrame.minimapCheckbox:SetChecked(minimapSettings.show)
     end
 end
 
@@ -987,27 +1048,29 @@ local function CreateMountIcon(parent, mountData, pool, index)
 
     btn:RegisterForClicks("LeftButtonUp", "RightButtonUp")
     btn:SetScript("OnClick", function(self, button)
+        local characterDB = GetCharacterDB()
+
         if self.pool then
             -- Remove from pool
             if self.pool == POOL_GROUND then
-                TableRemove(OneButtonMountDB.groundMounts, self.mountData.spellID)
+                TableRemove(characterDB.groundMounts, self.mountData.spellID)
             elseif self.pool == POOL_FLYING then
-                TableRemove(OneButtonMountDB.flyingMounts, self.mountData.spellID)
+                TableRemove(characterDB.flyingMounts, self.mountData.spellID)
             end
             OneButtonMount:RefreshConfigUI()
         else
             -- Add to pool
             if button == "LeftButton" then
-                if not TableContains(OneButtonMountDB.groundMounts, self.mountData.spellID) then
-                    table.insert(OneButtonMountDB.groundMounts, self.mountData.spellID)
+                if not TableContains(characterDB.groundMounts, self.mountData.spellID) then
+                    table.insert(characterDB.groundMounts, self.mountData.spellID)
                 end
             elseif button == "RightButton" then
                 if self.mountData.canDetermineFlying and not self.mountData.isFlying then
                     Feedback((self.mountData.name or "This mount") .. " cannot be added to flying rotation.")
                     return
                 end
-                if not TableContains(OneButtonMountDB.flyingMounts, self.mountData.spellID) then
-                    table.insert(OneButtonMountDB.flyingMounts, self.mountData.spellID)
+                if not TableContains(characterDB.flyingMounts, self.mountData.spellID) then
+                    table.insert(characterDB.flyingMounts, self.mountData.spellID)
                 end
             end
             OneButtonMount:RefreshConfigUI()
@@ -1042,6 +1105,8 @@ local function CreatePoolSection(parent, title, pool, yOffset)
 end
 
 function OneButtonMount:CreateConfigUI()
+    local characterDB = GetCharacterDB()
+
     if configFrame then return end
 
     ScanMounts()
@@ -1057,14 +1122,14 @@ function OneButtonMount:CreateConfigUI()
     configFrame:SetScript("OnDragStop", function(self)
         self:StopMovingOrSizing()
         local point, _, relPoint, xOfs, yOfs = self:GetPoint()
-        OneButtonMountDB.configPosition = { point = point, relativePoint = relPoint, xOfs = xOfs, yOfs = yOfs }
+        characterDB.configPosition = { point = point, relativePoint = relPoint, xOfs = xOfs, yOfs = yOfs }
     end)
     configFrame:SetFrameStrata("DIALOG")
     ApplyElvUISkin(configFrame, "frame")
 
     -- Restore position
-    if OneButtonMountDB.configPosition then
-        local pos = OneButtonMountDB.configPosition
+    if characterDB.configPosition then
+        local pos = characterDB.configPosition
         configFrame:ClearAllPoints()
         configFrame:SetPoint(pos.point, UIParent, pos.relativePoint, pos.xOfs, pos.yOfs)
     end
@@ -1091,7 +1156,7 @@ function OneButtonMount:CreateConfigUI()
     local keybindButton = CreateFrame("Button", nil, configFrame, "UIPanelButtonTemplate")
     keybindButton:SetSize(140, 25)
     keybindButton:SetPoint("LEFT", keybindLabel, "RIGHT", 10, 0)
-    keybindButton:SetText(OneButtonMountDB.keybind or "Click to Bind")
+    keybindButton:SetText(characterDB.keybind or "Click to Bind")
     configFrame.keybindButton = keybindButton
     ApplyElvUISkin(keybindButton, "button")
 
@@ -1116,7 +1181,7 @@ function OneButtonMount:CreateConfigUI()
     local function ApplyCapturedBinding(token)
         if not token or token == "" then
             keyCaptureFrame:Hide()
-            keybindButton:SetText(OneButtonMountDB.keybind or "Click to Bind")
+            keybindButton:SetText(characterDB.keybind or "Click to Bind")
             return
         end
 
@@ -1134,7 +1199,7 @@ function OneButtonMount:CreateConfigUI()
     keyCaptureFrame:SetScript("OnKeyDown", function(self, key)
         if key == "ESCAPE" then
             self:Hide()
-            keybindButton:SetText(OneButtonMountDB.keybind or "Click to Bind")
+            keybindButton:SetText(characterDB.keybind or "Click to Bind")
             return
         end
         -- Ignore modifier-only keys
@@ -1150,7 +1215,7 @@ function OneButtonMount:CreateConfigUI()
         if button == "LeftButton" then
             -- Left click cancels binding mode
             self:Hide()
-            keybindButton:SetText(OneButtonMountDB.keybind or "Click to Bind")
+            keybindButton:SetText(characterDB.keybind or "Click to Bind")
             return
         end
 
@@ -1169,7 +1234,7 @@ function OneButtonMount:CreateConfigUI()
     keybindButton:SetScript("OnClick", function(self)
         if keyCaptureFrame:IsShown() then
             keyCaptureFrame:Hide()
-            self:SetText(OneButtonMountDB.keybind or "Click to Bind")
+            self:SetText(characterDB.keybind or "Click to Bind")
         else
             keyCaptureFrame:Show()
             self:SetText("|cffff0000Press a key...|r")
@@ -1189,7 +1254,7 @@ function OneButtonMount:CreateConfigUI()
     -- ========================================================================
     local minimapCheck = CreateFrame("CheckButton", nil, configFrame, "UICheckButtonTemplate")
     minimapCheck:SetPoint("TOPLEFT", configFrame, "TOPLEFT", 12, yOffset)
-    minimapCheck:SetChecked(OneButtonMountDB.minimapButton.show)
+    minimapCheck:SetChecked(GetMinimapSettings().show)
     configFrame.minimapCheckbox = minimapCheck
     ApplyElvUISkin(minimapCheck, "checkbox")
 
@@ -1212,7 +1277,7 @@ function OneButtonMount:CreateConfigUI()
     textualFeedbackLabel:SetText("Show Textual Feedback")
 
     textualFeedbackCheck:SetScript("OnClick", function(self)
-        OneButtonMountDB.showTextualFeedback = self:GetChecked() and true or false
+        characterDB.showTextualFeedback = self:GetChecked() and true or false
     end)
 
     yOffset = yOffset - 35
@@ -1273,7 +1338,7 @@ function OneButtonMount:RefreshConfigUI()
     SanitizeSavedMountPools()
 
     if configFrame.minimapCheckbox then
-        configFrame.minimapCheckbox:SetChecked(OneButtonMountDB.minimapButton.show)
+        configFrame.minimapCheckbox:SetChecked(GetMinimapSettings().show)
     end
     if configFrame.textualFeedbackCheckbox then
         configFrame.textualFeedbackCheckbox:SetChecked(ShowTextualFeedback())
@@ -1287,7 +1352,7 @@ function OneButtonMount:RefreshConfigUI()
     end
     gc.mountButtons = {}
 
-    local groundMounts = OneButtonMountDB.groundMounts or {}
+    local groundMounts, flyingMounts = GetMountPools()
 
     if #groundMounts == 0 then
         gc.emptyText:Show()
@@ -1320,8 +1385,6 @@ function OneButtonMount:RefreshConfigUI()
         btn:SetParent(nil)
     end
     fc.mountButtons = {}
-
-    local flyingMounts = OneButtonMountDB.flyingMounts or {}
 
     if #flyingMounts == 0 then
         fc.emptyText:Show()
@@ -1444,31 +1507,52 @@ end
 -- ============================================================================
 
 function OneButtonMount:InitDB()
-    if not OneButtonMountDB then
+    if type(OneButtonMountDB) ~= "table" then
         OneButtonMountDB = {}
     end
 
-    if not OneButtonMountDB.groundMounts then
-        OneButtonMountDB.groundMounts = {}
+    local legacyDB = OneButtonMountDB
+    local characterDB = GetCharacterDB()
+    local hasLegacyProfile = type(legacyDB.groundMounts) == "table"
+        or type(legacyDB.flyingMounts) == "table"
+        or type(legacyDB.keybind) == "string"
+        or type(legacyDB.minimapButton) == "table"
+        or type(legacyDB.configPosition) == "table"
+        or legacyDB.showTextualFeedback ~= nil
+
+    if characterDB.profileVersion ~= CHARACTER_PROFILE_VERSION and hasLegacyProfile then
+        if type(characterDB.groundMounts) ~= "table" and type(legacyDB.groundMounts) == "table" then
+            characterDB.groundMounts = CopyValue(legacyDB.groundMounts)
+        end
+        if type(characterDB.flyingMounts) ~= "table" and type(legacyDB.flyingMounts) == "table" then
+            characterDB.flyingMounts = CopyValue(legacyDB.flyingMounts)
+        end
+        if characterDB.keybind == nil and type(legacyDB.keybind) == "string" then
+            characterDB.keybind = legacyDB.keybind
+        end
+        if characterDB.minimapButton == nil and type(legacyDB.minimapButton) == "table" then
+            characterDB.minimapButton = CopyValue(legacyDB.minimapButton)
+        end
+        if characterDB.configPosition == nil and type(legacyDB.configPosition) == "table" then
+            characterDB.configPosition = CopyValue(legacyDB.configPosition)
+        end
+        if characterDB.showTextualFeedback == nil and legacyDB.showTextualFeedback ~= nil then
+            characterDB.showTextualFeedback = legacyDB.showTextualFeedback and true or false
+        end
     end
-    if not OneButtonMountDB.flyingMounts then
-        OneButtonMountDB.flyingMounts = {}
+
+    local groundMounts, flyingMounts = GetMountPools()
+    characterDB.groundMounts = groundMounts
+    characterDB.flyingMounts = flyingMounts
+
+    if type(characterDB.keybind) ~= "string" and characterDB.keybind ~= nil then
+        characterDB.keybind = nil
     end
-    if not OneButtonMountDB.minimapButton then
-        OneButtonMountDB.minimapButton = {
-            show = true,
-            position = 220,
-        }
+    GetMinimapSettings()
+    if characterDB.showTextualFeedback == nil then
+        characterDB.showTextualFeedback = true
     end
-    if OneButtonMountDB.minimapButton.show == nil then
-        OneButtonMountDB.minimapButton.show = true
-    end
-    if not OneButtonMountDB.minimapButton.position then
-        OneButtonMountDB.minimapButton.position = 220
-    end
-    if OneButtonMountDB.showTextualFeedback == nil then
-        OneButtonMountDB.showTextualFeedback = true
-    end
+    characterDB.profileVersion = CHARACTER_PROFILE_VERSION
 end
 
 -- ============================================================================
@@ -1524,7 +1608,7 @@ eventFrame:SetScript("OnEvent", function(self, event, arg1, ...)
         SanitizeSavedMountPools()
 
         -- Create minimap button
-        if OneButtonMountDB.minimapButton.show then
+        if GetMinimapSettings().show then
             CreateMinimapButton()
             OneButtonMount:UpdateMinimapButtonPosition()
         end
