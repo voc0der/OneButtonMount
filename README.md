@@ -8,7 +8,7 @@
 - Keeps separate ground and flying pools with zone-aware selection
 - Supports direct keybind and mouse-chord summoning from the addon settings
 
-Current version: `1.0.14`
+Current version: `1.0.15`
 
 ## Config UI
 

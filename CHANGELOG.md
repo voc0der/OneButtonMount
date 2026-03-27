@@ -1,5 +1,11 @@
 ## [Unreleased]
 
+## [1.0.15] - 2026-03-27
+
+### Fixed
+- Prefer live zone text over stale `GetCurrentMapAreaID()` results so Stormwind and similar non-Outland zones do not incorrectly select flying mounts after visiting Outland
+- Added regression coverage to preserve the legacy area-ID fallback when zone text is unavailable while preventing stale Outland context from leaking into city mount selection
+
 ## [1.0.14] - 2026-03-26
 
 ### Fixed

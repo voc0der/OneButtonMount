@@ -434,15 +434,6 @@ local function CanFlyHere()
             end
         end
 
-        -- Legacy fallback: some clients can resolve areaID even when C_Map is unavailable.
-        if GetCurrentMapAreaID then
-            local areaID = GetCurrentMapAreaID()
-            if areaID and OUTLAND_MAP_IDS[areaID] then
-                return true
-            end
-        end
-
-        -- Final fallback: localized zone text.
         local zone = GetRealZoneText and GetRealZoneText()
         if zone and OUTLAND_ZONE_NAMES[zone] then
             return true
@@ -451,6 +442,19 @@ local function CanFlyHere()
         local parentZone = GetZoneText and GetZoneText()
         if parentZone and OUTLAND_ZONE_NAMES[parentZone] then
             return true
+        end
+
+        -- Prefer live zone text over area IDs because GetCurrentMapAreaID can be stale.
+        if zone or parentZone then
+            return false
+        end
+
+        -- Legacy fallback: some clients can resolve areaID even when text/map APIs are unavailable.
+        if GetCurrentMapAreaID then
+            local areaID = GetCurrentMapAreaID()
+            if areaID and OUTLAND_MAP_IDS[areaID] then
+                return true
+            end
         end
 
         return false
