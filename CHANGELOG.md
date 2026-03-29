@@ -1,5 +1,11 @@
 ## [Unreleased]
 
+## [1.0.17] - 2026-03-29
+
+### Fixed
+- Made Outland detection locale-safe by matching live zone text against localized `C_Map` names when available instead of relying on English-only fallback names
+- Prevented stale positive `C_Map.GetBestMapForUnit()` results from forcing flying mounts in non-Outland zones when live zone text disagrees with the resolved map hierarchy
+
 ## [1.0.16] - 2026-03-27
 
 ### Added
