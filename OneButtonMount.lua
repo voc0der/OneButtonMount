@@ -23,7 +23,7 @@ local OUTLAND_MAP_IDS = {
 }
 local OUTLAND_CONTINENT_MAP_ID = 101
 
--- Fallback zone names if map APIs are unavailable (enUS; last resort only)
+-- Fallback zone names if localized map metadata is unavailable (enUS only).
 local OUTLAND_ZONE_NAMES = {
     ["Hellfire Peninsula"] = true,
     ["Zangarmarsh"] = true,
@@ -224,6 +224,87 @@ local function HasBitFlag(value, flag)
 
     -- Fallback when bit libs are unavailable.
     return (value % (flag + flag)) >= flag
+end
+
+local function AddNameToSet(nameSet, name)
+    if type(name) == "string" and name ~= "" then
+        nameSet[name] = true
+    end
+end
+
+local function BuildLocalizedMapNameSet(mapIDs)
+    local nameSet = {}
+    local addedLocalizedName = false
+
+    if C_Map and C_Map.GetMapInfo then
+        for mapID in pairs(mapIDs) do
+            local info = C_Map.GetMapInfo(mapID)
+            if info and type(info.name) == "string" and info.name ~= "" then
+                nameSet[info.name] = true
+                addedLocalizedName = true
+            end
+        end
+    end
+
+    if addedLocalizedName then
+        return nameSet
+    end
+
+    return OUTLAND_ZONE_NAMES
+end
+
+local function BuildCurrentZoneNameSet()
+    local nameSet = {}
+
+    if GetRealZoneText then
+        AddNameToSet(nameSet, GetRealZoneText())
+    end
+
+    if GetZoneText then
+        AddNameToSet(nameSet, GetZoneText())
+    end
+
+    return nameSet
+end
+
+local function MapHierarchyContainsAnyName(mapID, nameSet)
+    if not mapID or not nameSet or not next(nameSet) then
+        return false
+    end
+
+    if not (C_Map and C_Map.GetMapInfo) then
+        return false
+    end
+
+    local info = C_Map.GetMapInfo(mapID)
+    while info do
+        if type(info.name) == "string" and nameSet[info.name] then
+            return true
+        end
+
+        local parentMapID = info.parentMapID
+        if parentMapID and parentMapID ~= 0 then
+            info = C_Map.GetMapInfo(parentMapID)
+        else
+            break
+        end
+    end
+
+    return false
+end
+
+local function ZoneNameSetContainsAnyName(zoneNames, candidateNames)
+    if not zoneNames or not candidateNames then
+        return false
+    end
+
+    for zoneName in pairs(zoneNames) do
+        if candidateNames[zoneName] then
+            return true
+        end
+    end
+
+    return false
 end
 
 -- ============================================================================
@@ -481,26 +562,28 @@ local function CanFlyHere()
     end
 
     local function IsInOutlandContext()
+        local zoneNames = BuildCurrentZoneNameSet()
+        local localizedOutlandZoneNames = BuildLocalizedMapNameSet(OUTLAND_MAP_IDS)
+
         -- Prefer map hierarchy when it exists so subzones inherit the correct continent.
         if C_Map and C_Map.GetBestMapForUnit then
             local mapID = C_Map.GetBestMapForUnit("player")
             if IsOutlandMapContext(mapID) then
-                return true
+                -- Guard against stale positive map IDs by making sure the live
+                -- zone text still matches the resolved map hierarchy when we
+                -- have current zone names to compare against.
+                if not next(zoneNames) or MapHierarchyContainsAnyName(mapID, zoneNames) then
+                    return true
+                end
             end
         end
 
-        local zone = GetRealZoneText and GetRealZoneText()
-        if zone and OUTLAND_ZONE_NAMES[zone] then
-            return true
-        end
-
-        local parentZone = GetZoneText and GetZoneText()
-        if parentZone and OUTLAND_ZONE_NAMES[parentZone] then
+        if ZoneNameSetContainsAnyName(zoneNames, localizedOutlandZoneNames) then
             return true
         end
 
         -- Prefer live zone text over area IDs because GetCurrentMapAreaID can be stale.
-        if zone or parentZone then
+        if next(zoneNames) then
             return false
         end
 

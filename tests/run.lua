@@ -599,6 +599,62 @@ run_test("zone text beats stale outland area IDs outside outland", function()
     assert_equal(state.last_call_companion_index, 1, "ground pool should be selected when zone text says Stormwind even if area ID is stale")
 end)
 
+run_test("localized map names still allow flying without english zone fallback", function()
+    local state = setup_env({
+        mounts = {
+            { spellID = 2041, name = "Ground Mount", mountType = 0x01 },
+            { spellID = 3041, name = "Flying Mount", mountType = 0x02 },
+        },
+        db = {
+            groundMounts = { 2041 },
+            flyingMounts = { 3041 },
+        },
+        known_spells = {
+            [34090] = true,
+        },
+        map_id = nil,
+        map_infos = {
+            [111] = { name = "Schatrath", parentMapID = 101 },
+            [101] = { name = "Scherbenwelt" },
+        },
+        real_zone_text = "Schatrath",
+        zone_text = "Schatrath",
+        is_flyable_area = true,
+    })
+
+    SlashCmdList["ONEBUTTONMOUNT"]("mount")
+
+    assert_equal(state.last_call_companion_index, 2, "localized zone text should still match Outland map names and select the flying pool")
+end)
+
+run_test("localized zone text beats stale outland c_map results outside outland", function()
+    local state = setup_env({
+        mounts = {
+            { spellID = 2051, name = "Ground Mount", mountType = 0x01 },
+            { spellID = 3051, name = "Flying Mount", mountType = 0x02 },
+        },
+        db = {
+            groundMounts = { 2051 },
+            flyingMounts = { 3051 },
+        },
+        known_spells = {
+            [34090] = true,
+        },
+        map_id = 111,
+        map_infos = {
+            [111] = { name = "Schatrath", parentMapID = 101 },
+            [101] = { name = "Scherbenwelt" },
+        },
+        real_zone_text = "Sturmwind",
+        zone_text = "Sturmwind",
+        is_flyable_area = true,
+    })
+
+    SlashCmdList["ONEBUTTONMOUNT"]("mount")
+
+    assert_equal(state.last_call_companion_index, 1, "localized live zone text should override a stale Outland C_Map result")
+end)
+
 run_test("aq40 only uses configured qiraji crystals", function()
     local state = setup_env({
         num_companions_mode = "no_values",
