@@ -1,5 +1,7 @@
 ## [Unreleased]
 
+## [1.0.21] - 2026-03-30
+
 ### Fixed
 - Removed the broken `/obm mount` summon path from the slash interface entirely so summoning stays on the normal keybind and UI paths
 
