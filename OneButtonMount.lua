@@ -38,7 +38,15 @@ local OUTLAND_ZONE_NAMES = {
 -- Flying riding skill spell IDs
 local EXPERT_RIDING = 34090
 local ARTISAN_RIDING = 34091
+local FLYING_MOUNT_MIN_LEVEL = 70
 local CHARACTER_PROFILE_VERSION = 2
+
+local SPELL_MOUNT_SPELLS = {
+    { spellID = 13819, name = "Summon Warhorse", icon = "Interface\\Icons\\Spell_Nature_Swiftness", isFlying = false },
+    { spellID = 23214, name = "Summon Charger", icon = "Interface\\Icons\\Ability_Mount_Charger", isFlying = false },
+    { spellID = 5784, name = "Summon Felsteed", icon = "Interface\\Icons\\Spell_Nature_Swiftness", isFlying = false },
+    { spellID = 23161, name = "Summon Dreadsteed", icon = "Interface\\Icons\\Ability_Mount_Dreadsteed", isFlying = false },
+}
 
 -- Mount type flags from GetCompanionInfo's 6th return value
 -- Bitmask: 0x01 = ground, 0x02 = flying, 0x10 = underwater
@@ -224,6 +232,28 @@ local function HasBitFlag(value, flag)
 
     -- Fallback when bit libs are unavailable.
     return (value % (flag + flag)) >= flag
+end
+
+local function HasFlyingRidingSkill()
+    local playerLevel = nil
+    if UnitLevel then
+        playerLevel = SafeToNumber(UnitLevel("player"))
+        if playerLevel and playerLevel > 0 and playerLevel < FLYING_MOUNT_MIN_LEVEL then
+            return false
+        end
+    end
+
+    if IsSpellKnown then
+        local hasExpert = IsSpellKnown(EXPERT_RIDING)
+        local hasArtisan = IsSpellKnown(ARTISAN_RIDING)
+        if hasExpert or hasArtisan then
+            return true
+        end
+
+        return false
+    end
+
+    return playerLevel == nil or playerLevel >= FLYING_MOUNT_MIN_LEVEL
 end
 
 local function AddNameToSet(nameSet, name)
@@ -514,6 +544,28 @@ local function ScanMounts()
         end
     end
 
+    -- Paladin and warlock class mounts are cast directly and do not always
+    -- appear in companion, journal, or bag-based mount lists.
+    if IsSpellKnown then
+        for _, spellMount in ipairs(SPELL_MOUNT_SPELLS) do
+            if IsSpellKnown(spellMount.spellID) then
+                local spellName = spellMount.name
+                local spellIcon = spellMount.icon
+                if GetSpellInfo then
+                    local liveName, _, liveIcon = GetSpellInfo(spellMount.spellID)
+                    if liveName then
+                        spellName = liveName
+                    end
+                    if liveIcon then
+                        spellIcon = liveIcon
+                    end
+                end
+
+                AddMountEntry(spellMount.spellID, spellName, spellIcon, spellMount.isFlying, true, nil, nil, nil)
+            end
+        end
+    end
+
     table.sort(allMounts, function(a, b) return (a.name or "") < (b.name or "") end)
 end
 
@@ -602,20 +654,14 @@ local function CanFlyHere()
         return false
     end
 
+    if not HasFlyingRidingSkill() then
+        return false
+    end
+
     if IsFlyableArea then
         local ok, flyable = pcall(IsFlyableArea)
         if ok and flyable then
             return true
-        end
-    end
-
-    -- Check if player has flying riding skill when the native flyable-area signal
-    -- is unavailable or inconclusive.
-    if IsSpellKnown then
-        local hasExpert = IsSpellKnown(EXPERT_RIDING)
-        local hasArtisan = IsSpellKnown(ARTISAN_RIDING)
-        if not hasExpert and not hasArtisan then
-            return false
         end
     end
 
@@ -687,6 +733,7 @@ end
 
 local function BuildEligibleMountPool()
     local groundMounts, flyingMounts = GetMountPools()
+    local canFlyHere = CanFlyHere()
 
     local function FilterPool(sourcePool, includeAQ40Crystals)
         local filtered = {}
@@ -694,7 +741,8 @@ local function BuildEligibleMountPool()
             local mount = GetMountBySpellID(spellID)
             if mount then
                 local isAQ40Crystal = IsAQ40CrystalMount(mount)
-                if includeAQ40Crystals == isAQ40Crystal then
+                local isUsableFlyingMount = not mount.canDetermineFlying or not mount.isFlying or canFlyHere
+                if includeAQ40Crystals == isAQ40Crystal and isUsableFlyingMount then
                     table.insert(filtered, spellID)
                 end
             end
@@ -727,7 +775,7 @@ local function BuildEligibleMountPool()
     end
 
     local function SelectPrimaryAndSecondaryPools()
-        if CanFlyHere() and #flyingMounts > 0 then
+        if canFlyHere and #flyingMounts > 0 then
             return flyingMounts, groundMounts
         end
         return groundMounts, nil

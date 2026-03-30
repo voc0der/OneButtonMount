@@ -56,8 +56,10 @@ local function setup_env(opts)
         num_slots_mode = opts.num_slots_mode,
         strict_tonumber = opts.strict_tonumber or false,
         is_flyable_area = opts.is_flyable_area,
+        player_level = opts.player_level or 70,
         player_name = opts.player_name or "TestPlayer",
         realm_name = opts.realm_name or "TestRealm",
+        spell_infos = opts.spell_infos or {},
     }
 
     _G.unpack = table.unpack
@@ -270,19 +272,24 @@ local function setup_env(opts)
         state.last_used_item_id = item_id
     end
     _G.GetSpellInfo = function(spell_id)
+        local spell_info = state.spell_infos[spell_id]
+        if spell_info then
+            return spell_info.name, spell_info.rank, spell_info.icon
+        end
         for _, mount in ipairs(state.mounts) do
             if mount.spellID == spell_id then
-                return mount.name
+                return mount.name, nil, mount.icon or "icon"
             end
         end
         for _, mount in ipairs(state.mount_journal_mounts) do
             if mount.spellID == spell_id then
-                return mount.name
+                return mount.name, nil, mount.icon or "icon"
             end
         end
         for item_id, spell in pairs(state.item_spells) do
             if spell.spellID == spell_id then
-                return spell.name
+                local item_info = state.item_infos[item_id]
+                return spell.name, nil, item_info and item_info.icon or "icon"
             end
         end
         return nil
@@ -309,6 +316,12 @@ local function setup_env(opts)
     _G.IsControlKeyDown = function() return state.control_down end
     _G.IsAltKeyDown = function() return state.alt_down end
     _G.IsFlyableArea = function() return state.is_flyable_area end
+    _G.UnitLevel = function(unit)
+        if unit == "player" then
+            return state.player_level
+        end
+        return nil
+    end
     _G.UnitFullName = function(unit)
         if unit == "player" then
             return state.player_name, state.realm_name
@@ -529,7 +542,7 @@ run_test("area-id fallback still allows flying when zone text is unavailable", f
     assert_equal(state.last_call_companion_index, 2, "area-id fallback should still select the flying pool when zone text is unavailable")
 end)
 
-run_test("is flyable area signal selects flying pool even without riding spell flags", function()
+run_test("is flyable area signal does not bypass missing riding skill", function()
     local state = setup_env({
         mounts = {
             { spellID = 2011, name = "Ground Mount", mountType = 0x01 },
@@ -547,7 +560,7 @@ run_test("is flyable area signal selects flying pool even without riding spell f
 
     SlashCmdList["ONEBUTTONMOUNT"]("mount")
 
-    assert_equal(state.last_call_companion_index, 2, "flying pool should be selected when IsFlyableArea returns true")
+    assert_equal(state.last_call_companion_index, 1, "ground pool should be selected until the character can actually use flying mounts")
 end)
 
 run_test("non-outland flyable-area signal does not force flying pool", function()
@@ -981,6 +994,70 @@ run_test("companion index probe fallback works when companion count is unavailab
 
     SlashCmdList["ONEBUTTONMOUNT"]("mount")
     assert_equal(state.last_call_companion_index, 1, "companion probe fallback should summon via CallCompanion")
+end)
+
+run_test("class mount spells populate available mounts and summon by spell", function()
+    local state = setup_env({
+        known_spells = {
+            [13819] = true,
+            [23214] = true,
+            [5784] = true,
+            [23161] = true,
+        },
+        spell_infos = {
+            [13819] = { name = "Summon Warhorse", icon = "warhorse" },
+            [23214] = { name = "Summon Charger", icon = "charger" },
+            [5784] = { name = "Summon Felsteed", icon = "felsteed" },
+            [23161] = { name = "Summon Dreadsteed", icon = "dreadsteed" },
+        },
+        db = {
+            groundMounts = { 13819 },
+            flyingMounts = {},
+        },
+        c_map_enabled = false,
+    })
+
+    SlashCmdList["ONEBUTTONMOUNT"]("")
+
+    local config_frame = _G.OneButtonMountConfigFrame
+    assert_true(config_frame ~= nil, "config frame not created")
+
+    local found_spells = {}
+    for _, button in ipairs(config_frame.mountButtons) do
+        if button.mountData and button.mountData.spellID then
+            found_spells[button.mountData.spellID] = true
+        end
+    end
+
+    assert_true(found_spells[13819], "warhorse should appear in the available mount list")
+    assert_true(found_spells[23214], "charger should appear in the available mount list")
+    assert_true(found_spells[5784], "felsteed should appear in the available mount list")
+    assert_true(found_spells[23161], "dreadsteed should appear in the available mount list")
+
+    SlashCmdList["ONEBUTTONMOUNT"]("mount")
+    assert_equal(state.last_cast_spell_id, 13819, "class mount should summon through spell casting")
+end)
+
+run_test("ground pool skips known flying mounts until the character can fly", function()
+    local state = setup_env({
+        mounts = {
+            { spellID = 2111, name = "Ground Mount", mountType = 0x01 },
+            { spellID = 3111, name = "Flying Mount", mountType = 0x02 },
+        },
+        db = {
+            groundMounts = { 3111, 2111 },
+            flyingMounts = {},
+        },
+        known_spells = {},
+        player_level = 69,
+        is_flyable_area = true,
+        c_map_enabled = false,
+        real_zone_text = "Nagrand",
+    })
+
+    SlashCmdList["ONEBUTTONMOUNT"]("mount")
+
+    assert_equal(state.last_call_companion_index, 1, "known flying mounts in the ground pool should be skipped until the character can ride them")
 end)
 
 run_test("non-flying mounts cannot be added to flying rotation", function()
