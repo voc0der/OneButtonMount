@@ -1,5 +1,8 @@
 ## [Unreleased]
 
+### Fixed
+- Reverted the `/obm mount` `RunMacroText()` preference so the slash command uses the direct summon APIs again instead of silently no-oping on clients where addon-driven macro execution is not available
+
 ## [1.0.20] - 2026-03-30
 
 ### Fixed

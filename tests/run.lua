@@ -1134,7 +1134,7 @@ run_test("class mount spells populate available mounts and summon by spell", fun
     assert_equal(state.last_cast_spell_id, 13819, "class mount should summon through spell casting")
 end)
 
-run_test("slash summon uses macro-text path when available", function()
+run_test("slash summon still uses direct cast path when RunMacroText exists", function()
     local state = setup_env({
         run_macro_text_available = true,
         known_spells = {
@@ -1152,8 +1152,8 @@ run_test("slash summon uses macro-text path when available", function()
 
     SlashCmdList["ONEBUTTONMOUNT"]("mount")
 
-    assert_equal(state.last_run_macro_text, "/cast Summon Charger", "slash summon should reuse the macro-style action path when available")
-    assert_equal(state.last_cast_spell_id, nil, "macro-text path should avoid the direct CastSpellByID fallback")
+    assert_equal(state.last_run_macro_text, nil, "slash summon should not depend on RunMacroText")
+    assert_equal(state.last_cast_spell_id, 23214, "slash summon should continue to cast directly")
 end)
 
 run_test("class mount spells populate from spellbook when IsSpellKnown is unavailable", function()

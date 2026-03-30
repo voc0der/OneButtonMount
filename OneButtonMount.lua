@@ -1192,14 +1192,6 @@ local function SummonRandomMount()
     -- Pick a random mount from the pool
     local spellID = pool[math.random(#pool)]
     local mount = GetMountBySpellID(spellID)
-    local macroText = BuildMountMacroText(spellID, mount)
-
-    -- Prefer the same macro-style action path used by the working keybind flow.
-    if macroText and RunMacroText then
-        RunMacroText(macroText)
-        return
-    end
-
     if mount then
         if mount.journalID and C_MountJournal and C_MountJournal.SummonByID then
             C_MountJournal.SummonByID(mount.journalID)
