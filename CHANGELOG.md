@@ -1,5 +1,7 @@
 ## [Unreleased]
 
+## [1.0.19] - 2026-03-30
+
 ### Added
 - Added `/obm debug` to print a single-line snapshot of the live zone, map, riding, flyable-area, and pool-selection state for troubleshooting
 
