@@ -64,6 +64,7 @@ local function setup_env(opts)
         player_spells = opts.player_spells or {},
         is_spell_known_available = opts.is_spell_known_available ~= false,
         locale = opts.locale or "enUS",
+        run_macro_text_available = opts.run_macro_text_available or false,
     }
 
     _G.unpack = table.unpack
@@ -275,6 +276,13 @@ local function setup_env(opts)
     end
     _G.UseItemByName = function(item_id)
         state.last_used_item_id = item_id
+    end
+    if state.run_macro_text_available then
+        _G.RunMacroText = function(macro_text)
+            state.last_run_macro_text = macro_text
+        end
+    else
+        _G.RunMacroText = nil
     end
     _G.GetSpellInfo = function(spell_id)
         local spell_info = state.spell_infos[spell_id]
@@ -1124,6 +1132,28 @@ run_test("class mount spells populate available mounts and summon by spell", fun
 
     SlashCmdList["ONEBUTTONMOUNT"]("mount")
     assert_equal(state.last_cast_spell_id, 13819, "class mount should summon through spell casting")
+end)
+
+run_test("slash summon uses macro-text path when available", function()
+    local state = setup_env({
+        run_macro_text_available = true,
+        known_spells = {
+            [23214] = true,
+        },
+        spell_infos = {
+            [23214] = { name = "Summon Charger", icon = "charger" },
+        },
+        db = {
+            groundMounts = { 23214 },
+            flyingMounts = {},
+        },
+        c_map_enabled = false,
+    })
+
+    SlashCmdList["ONEBUTTONMOUNT"]("mount")
+
+    assert_equal(state.last_run_macro_text, "/cast Summon Charger", "slash summon should reuse the macro-style action path when available")
+    assert_equal(state.last_cast_spell_id, nil, "macro-text path should avoid the direct CastSpellByID fallback")
 end)
 
 run_test("class mount spells populate from spellbook when IsSpellKnown is unavailable", function()

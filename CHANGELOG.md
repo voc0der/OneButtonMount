@@ -6,6 +6,7 @@
 - Added `/obm debug` to print a single-line snapshot of the live zone, map, riding, flyable-area, and pool-selection state for troubleshooting
 
 ### Fixed
+- Made `/obm mount` prefer the same macro-style summon path used by the working hotkey flow when the client exposes `RunMacroText()`
 - Added spellbook-based known-spell fallback so paladin and warlock class mounts still appear in the selectable pool on TBC clients where `IsSpellKnown()` does not expose those spells reliably
 - Reused the same spellbook fallback for riding-skill checks so flying eligibility no longer depends on a single spell-knowledge API
 - Replaced several logic-critical English string checks with spell IDs, localized spell names, localized map metadata, or localized item subtype comparisons so non-English clients no longer depend on raw English game text

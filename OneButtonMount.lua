@@ -1150,6 +1150,19 @@ end
 -- Mount Summoning
 -- ============================================================================
 
+local function BuildMountMacroText(spellID, mount)
+    if mount and mount.itemID then
+        return "/use item:" .. mount.itemID
+    end
+
+    local spellName = GetSpellInfo and GetSpellInfo(spellID)
+    if spellName then
+        return "/cast " .. spellName
+    end
+
+    return nil
+end
+
 local function SummonRandomMount()
     if InCombatLockdown() then
         Feedback("Cannot mount in combat.")
@@ -1179,6 +1192,13 @@ local function SummonRandomMount()
     -- Pick a random mount from the pool
     local spellID = pool[math.random(#pool)]
     local mount = GetMountBySpellID(spellID)
+    local macroText = BuildMountMacroText(spellID, mount)
+
+    -- Prefer the same macro-style action path used by the working keybind flow.
+    if macroText and RunMacroText then
+        RunMacroText(macroText)
+        return
+    end
 
     if mount then
         if mount.journalID and C_MountJournal and C_MountJournal.SummonByID then
@@ -1283,16 +1303,12 @@ bindingFrame:SetScript("PreClick", function(self, button)
 
     local spellID = pool[math.random(#pool)]
     local mount = GetMountBySpellID(spellID)
-    if mount and mount.itemID then
-        self:SetAttribute("macrotext", "/use item:" .. mount.itemID)
+    local macroText = BuildMountMacroText(spellID, mount)
+    if macroText then
+        self:SetAttribute("macrotext", macroText)
     else
-        local spellName = GetSpellInfo(spellID)
-        if spellName then
-            self:SetAttribute("macrotext", "/cast " .. spellName)
-        else
-            -- Fallback: clear macrotext to avoid firing a stale spell
-            self:SetAttribute("macrotext", "")
-        end
+        -- Fallback: clear macrotext to avoid firing a stale spell
+        self:SetAttribute("macrotext", "")
     end
 end)
 
