@@ -42,6 +42,7 @@ Current version: `1.0.19`
 
 - `/onebuttonmount` or `/obm`: Open/close config UI
 - `/obm mount`: Summon random mount immediately
+- `/obm debug`: Print a one-line mount-selection diagnostic snapshot
 - `/obm minimap`: Toggle minimap button
 - `/obm help`: Show command help
 
