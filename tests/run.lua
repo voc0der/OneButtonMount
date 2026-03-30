@@ -539,6 +539,73 @@ local function run_test(name, fn)
     end
 end
 
+local function resolve_spell_id_by_name(state, spell_name)
+    if not spell_name then
+        return nil
+    end
+
+    for spell_id, spell_info in pairs(state.spell_infos or {}) do
+        if spell_info.name == spell_name then
+            return spell_id
+        end
+    end
+
+    for _, mount in ipairs(state.mounts or {}) do
+        if mount.name == spell_name then
+            return mount.spellID
+        end
+    end
+
+    for _, mount in ipairs(state.mount_journal_mounts or {}) do
+        if mount.name == spell_name then
+            return mount.spellID
+        end
+    end
+
+    for _, spell in pairs(state.item_spells or {}) do
+        if spell.name == spell_name then
+            return spell.spellID
+        end
+    end
+
+    return nil
+end
+
+local function trigger_secure_mount(state, button)
+    local binding_button = _G.OneButtonMountBindingButton
+    assert_true(binding_button ~= nil, "binding button not created")
+    assert_true(type(binding_button.scripts["PreClick"]) == "function", "binding button PreClick missing")
+
+    state.last_binding_macrotext = nil
+    state.last_cast_spell_id = nil
+    state.last_cast_spell_name = nil
+    state.last_used_item_id = nil
+
+    binding_button.scripts["PreClick"](binding_button, button or "LeftButton")
+
+    local macro_text = binding_button:GetAttribute("macrotext")
+    state.last_binding_macrotext = macro_text
+
+    if macro_text == "/dismount" then
+        state.dismounted = true
+        return macro_text
+    end
+
+    local item_id = string.match(macro_text or "", "^/use item:(%d+)$")
+    if item_id then
+        state.last_used_item_id = tonumber(item_id)
+        return macro_text
+    end
+
+    local spell_name = string.match(macro_text or "", "^/cast (.+)$")
+    if spell_name then
+        state.last_cast_spell_name = spell_name
+        state.last_cast_spell_id = resolve_spell_id_by_name(state, spell_name)
+    end
+
+    return macro_text
+end
+
 run_test("stale mount IDs are pruned before summoning", function()
     local state = setup_env({
         mounts = {
@@ -551,12 +618,12 @@ run_test("stale mount IDs are pruned before summoning", function()
         c_map_enabled = false,
     })
 
-    SlashCmdList["ONEBUTTONMOUNT"]("mount")
+    trigger_secure_mount(state)
 
     assert_equal(#OneButtonMountCharDB.groundMounts, 1, "ground pool should be sanitized")
     assert_equal(OneButtonMountCharDB.groundMounts[1], 1001, "valid ground mount should remain")
     assert_equal(#OneButtonMountCharDB.flyingMounts, 0, "invalid flying mount should be removed")
-    assert_equal(state.last_call_companion_index, 1, "valid mount should be summoned")
+    assert_equal(state.last_cast_spell_id, 1001, "valid mount should be selected by the secure button")
 end)
 
 run_test("zone-text fallback still allows flying without C_Map", function()
@@ -576,9 +643,9 @@ run_test("zone-text fallback still allows flying without C_Map", function()
         real_zone_text = "Nagrand",
     })
 
-    SlashCmdList["ONEBUTTONMOUNT"]("mount")
+    trigger_secure_mount(state)
 
-    assert_equal(state.last_call_companion_index, 2, "flying pool should be selected in Outland")
+    assert_equal(state.last_cast_spell_id, 3001, "flying pool should be selected in Outland")
 end)
 
 run_test("area-id fallback still allows flying when zone text is unavailable", function()
@@ -598,9 +665,9 @@ run_test("area-id fallback still allows flying when zone text is unavailable", f
         current_map_area_id = 111,
     })
 
-    SlashCmdList["ONEBUTTONMOUNT"]("mount")
+    trigger_secure_mount(state)
 
-    assert_equal(state.last_call_companion_index, 2, "area-id fallback should still select the flying pool when zone text is unavailable")
+    assert_equal(state.last_cast_spell_id, 3002, "area-id fallback should still select the flying pool when zone text is unavailable")
 end)
 
 run_test("is flyable area signal does not bypass missing riding skill", function()
@@ -619,9 +686,9 @@ run_test("is flyable area signal does not bypass missing riding skill", function
         real_zone_text = "Shattrath City",
     })
 
-    SlashCmdList["ONEBUTTONMOUNT"]("mount")
+    trigger_secure_mount(state)
 
-    assert_equal(state.last_call_companion_index, 1, "ground pool should be selected until the character can actually use flying mounts")
+    assert_equal(state.last_cast_spell_id, 2011, "ground pool should be selected until the character can actually use flying mounts")
 end)
 
 run_test("non-outland flyable-area signal does not force flying pool", function()
@@ -643,9 +710,9 @@ run_test("non-outland flyable-area signal does not force flying pool", function(
         zone_text = "Orgrimmar",
     })
 
-    SlashCmdList["ONEBUTTONMOUNT"]("mount")
+    trigger_secure_mount(state)
 
-    assert_equal(state.last_call_companion_index, 1, "ground pool should be selected outside Outland even when IsFlyableArea returns true")
+    assert_equal(state.last_cast_spell_id, 2021, "ground pool should be selected outside Outland even when IsFlyableArea returns true")
 end)
 
 run_test("zone text beats stale outland area IDs outside outland", function()
@@ -668,9 +735,9 @@ run_test("zone text beats stale outland area IDs outside outland", function()
         is_flyable_area = false,
     })
 
-    SlashCmdList["ONEBUTTONMOUNT"]("mount")
+    trigger_secure_mount(state)
 
-    assert_equal(state.last_call_companion_index, 1, "ground pool should be selected when zone text says Stormwind even if area ID is stale")
+    assert_equal(state.last_cast_spell_id, 2031, "ground pool should be selected when zone text says Stormwind even if area ID is stale")
 end)
 
 run_test("localized map names still allow flying without english zone fallback", function()
@@ -696,9 +763,9 @@ run_test("localized map names still allow flying without english zone fallback",
         is_flyable_area = true,
     })
 
-    SlashCmdList["ONEBUTTONMOUNT"]("mount")
+    trigger_secure_mount(state)
 
-    assert_equal(state.last_call_companion_index, 2, "localized zone text should still match Outland map names and select the flying pool")
+    assert_equal(state.last_cast_spell_id, 3041, "localized zone text should still match Outland map names and select the flying pool")
 end)
 
 run_test("localized zone text beats stale outland c_map results outside outland", function()
@@ -724,9 +791,9 @@ run_test("localized zone text beats stale outland c_map results outside outland"
         is_flyable_area = true,
     })
 
-    SlashCmdList["ONEBUTTONMOUNT"]("mount")
+    trigger_secure_mount(state)
 
-    assert_equal(state.last_call_companion_index, 1, "localized live zone text should override a stale Outland C_Map result")
+    assert_equal(state.last_cast_spell_id, 2051, "localized live zone text should override a stale Outland C_Map result")
 end)
 
 run_test("aq40 only uses configured qiraji crystals", function()
@@ -755,7 +822,7 @@ run_test("aq40 only uses configured qiraji crystals", function()
         c_map_enabled = false,
     })
 
-    SlashCmdList["ONEBUTTONMOUNT"]("mount")
+    trigger_secure_mount(state)
 
     assert_equal(state.last_used_item_id, 21218, "AQ40 should only allow configured qiraji crystals")
 end)
@@ -780,7 +847,7 @@ run_test("outside aq40 excludes qiraji crystals from selection", function()
         c_map_enabled = false,
     })
 
-    SlashCmdList["ONEBUTTONMOUNT"]("mount")
+    trigger_secure_mount(state)
 
     assert_equal(state.last_used_item_id, 37012, "outside AQ40 should skip qiraji crystal mounts")
 end)
@@ -803,8 +870,9 @@ run_test("outside aq40 with only qiraji mounts reports no eligible mounts", func
         c_map_enabled = false,
     })
 
-    SlashCmdList["ONEBUTTONMOUNT"]("mount")
+    trigger_secure_mount(state)
 
+    assert_equal(state.last_binding_macrotext, "", "outside AQ40 should not prepare a summon macro for qiraji crystals")
     assert_equal(state.last_used_item_id, nil, "outside AQ40 should not summon qiraji crystals")
     local found_message = false
     for _, line in ipairs(state.chat) do
@@ -884,7 +952,7 @@ run_test("disabled textual feedback suppresses addon feedback but not explicit h
 
     assert_equal(#state.chat, 0, "load feedback should be muted when disabled")
 
-    SlashCmdList["ONEBUTTONMOUNT"]("mount")
+    trigger_secure_mount(state)
     SlashCmdList["ONEBUTTONMOUNT"]("minimap")
 
     assert_equal(#state.chat, 0, "mount and status feedback should be muted when disabled")
@@ -1038,8 +1106,8 @@ run_test("mount journal fallback populates mounts and can summon", function()
     assert_true(config_frame ~= nil, "config frame not created")
     assert_true(type(config_frame.mountButtons) == "table" and #config_frame.mountButtons >= 2, "mount journal entries should populate available list")
 
-    SlashCmdList["ONEBUTTONMOUNT"]("mount")
-    assert_equal(state.last_journal_summon_id, 9001, "journal mount should summon via C_MountJournal")
+    trigger_secure_mount(state)
+    assert_equal(state.last_cast_spell_id, 8101, "journal mount should still be selected through the secure button")
 end)
 
 run_test("bag mount fallback populates mounts and summons via item use", function()
@@ -1066,7 +1134,7 @@ run_test("bag mount fallback populates mounts and summons via item use", functio
     assert_true(config_frame ~= nil, "config frame not created")
     assert_true(type(config_frame.mountButtons) == "table" and #config_frame.mountButtons >= 2, "bag mount entries should populate available list")
 
-    SlashCmdList["ONEBUTTONMOUNT"]("mount")
+    trigger_secure_mount(state)
     assert_equal(state.last_used_item_id, 37012, "bag mount should summon via UseItemByName")
 end)
 
@@ -1088,8 +1156,8 @@ run_test("companion index probe fallback works when companion count is unavailab
     assert_true(config_frame ~= nil, "config frame not created")
     assert_true(type(config_frame.mountButtons) == "table" and #config_frame.mountButtons >= 1, "companion probe should populate available mounts")
 
-    SlashCmdList["ONEBUTTONMOUNT"]("mount")
-    assert_equal(state.last_call_companion_index, 1, "companion probe fallback should summon via CallCompanion")
+    trigger_secure_mount(state)
+    assert_equal(state.last_cast_spell_id, 9201, "companion probe fallback should still select the probed mount")
 end)
 
 run_test("class mount spells populate available mounts and summon by spell", function()
@@ -1130,13 +1198,12 @@ run_test("class mount spells populate available mounts and summon by spell", fun
     assert_true(found_spells[5784], "felsteed should appear in the available mount list")
     assert_true(found_spells[23161], "dreadsteed should appear in the available mount list")
 
-    SlashCmdList["ONEBUTTONMOUNT"]("mount")
+    trigger_secure_mount(state)
     assert_equal(state.last_cast_spell_id, 13819, "class mount should summon through spell casting")
 end)
 
-run_test("slash summon still uses direct cast path when RunMacroText exists", function()
+run_test("mount slash command is no longer supported", function()
     local state = setup_env({
-        run_macro_text_available = true,
         known_spells = {
             [23214] = true,
         },
@@ -1150,10 +1217,17 @@ run_test("slash summon still uses direct cast path when RunMacroText exists", fu
         c_map_enabled = false,
     })
 
+    if _G.OneButtonMountConfigFrame then
+        _G.OneButtonMountConfigFrame:Hide()
+    end
+
     SlashCmdList["ONEBUTTONMOUNT"]("mount")
 
-    assert_equal(state.last_run_macro_text, nil, "slash summon should not depend on RunMacroText")
-    assert_equal(state.last_cast_spell_id, 23214, "slash summon should continue to cast directly")
+    assert_equal(state.last_cast_spell_id, nil, "mount slash command should not attempt a protected summon")
+    assert_true(_G.OneButtonMountConfigFrame == nil or not _G.OneButtonMountConfigFrame:IsShown(), "mount slash command should not fall back to opening the config")
+    local last_line = state.chat[#state.chat]
+    assert_true(type(last_line) == "string", "mount slash command should print an unknown-command message")
+    assert_true(string.find(last_line, "Unknown command.", 1, true) ~= nil, "mount slash command should be treated as an unknown command")
 end)
 
 run_test("class mount spells populate from spellbook when IsSpellKnown is unavailable", function()
@@ -1187,7 +1261,7 @@ run_test("class mount spells populate from spellbook when IsSpellKnown is unavai
 
     assert_true(found_charger, "charger should appear in the available mount list from spellbook fallback")
 
-    SlashCmdList["ONEBUTTONMOUNT"]("mount")
+    trigger_secure_mount(state)
     assert_equal(state.last_cast_spell_id, 23214, "spellbook fallback mount should summon through spell casting")
 end)
 
@@ -1223,7 +1297,7 @@ run_test("localized spellbook names still match class mounts without spell IDs",
 
     assert_true(found_charger, "localized spellbook name should still expose the class mount")
 
-    SlashCmdList["ONEBUTTONMOUNT"]("mount")
+    trigger_secure_mount(state)
     assert_equal(state.last_cast_spell_id, 23214, "localized spellbook fallback should still summon through spell casting")
 end)
 
@@ -1244,9 +1318,9 @@ run_test("ground pool skips known flying mounts until the character can fly", fu
         real_zone_text = "Nagrand",
     })
 
-    SlashCmdList["ONEBUTTONMOUNT"]("mount")
+    trigger_secure_mount(state)
 
-    assert_equal(state.last_call_companion_index, 1, "known flying mounts in the ground pool should be skipped until the character can ride them")
+    assert_equal(state.last_cast_spell_id, 2111, "known flying mounts in the ground pool should be skipped until the character can ride them")
 end)
 
 run_test("spellbook fallback keeps ground mounts selected until riding is learned", function()
@@ -1266,9 +1340,9 @@ run_test("spellbook fallback keeps ground mounts selected until riding is learne
         real_zone_text = "Nagrand",
     })
 
-    SlashCmdList["ONEBUTTONMOUNT"]("mount")
+    trigger_secure_mount(state)
 
-    assert_equal(state.last_call_companion_index, 1, "without a known riding spell in the spellbook fallback, the addon should stay on ground mounts")
+    assert_equal(state.last_cast_spell_id, 2121, "without a known riding spell in the spellbook fallback, the addon should stay on ground mounts")
 end)
 
 run_test("spellbook fallback allows flying once riding is present", function()
@@ -1291,9 +1365,9 @@ run_test("spellbook fallback allows flying once riding is present", function()
         real_zone_text = "Nagrand",
     })
 
-    SlashCmdList["ONEBUTTONMOUNT"]("mount")
+    trigger_secure_mount(state)
 
-    assert_equal(state.last_call_companion_index, 2, "riding found via spellbook fallback should allow the flying pool")
+    assert_equal(state.last_cast_spell_id, 3131, "riding found via spellbook fallback should allow the flying pool")
 end)
 
 run_test("non-flying mounts cannot be added to flying rotation", function()

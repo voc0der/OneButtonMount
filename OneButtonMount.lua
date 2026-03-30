@@ -2028,19 +2028,16 @@ SlashCmdList["ONEBUTTONMOUNT"] = function(msg)
         Print("  /onebuttonmount - Open config UI")
         Print("  /obm - Short alias")
         Print("  /obm minimap - Toggle minimap button")
-        Print("  /obm mount - Summon a random mount")
         Print("  /obm debug - Print live mount-selection state")
         Print("  /obm help - Show this help")
     elseif cmd == "minimap" or cmd == "mm" then
         OneButtonMount:ToggleMinimapButton()
-    elseif cmd == "mount" or cmd == "go" then
-        SummonRandomMount()
     elseif cmd == "debug" or cmd == "diag" then
         PrintDebugSummary()
     elseif cmd == "config" or cmd == "ui" or cmd == "gui" then
         OneButtonMount:ShowConfigUI()
     else
-        OneButtonMount:ToggleConfigUI()
+        Print("Unknown command. Use /obm help.")
     end
 end
 
