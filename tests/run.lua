@@ -63,6 +63,7 @@ local function setup_env(opts)
         spellbook_entries = opts.spellbook_entries or {},
         player_spells = opts.player_spells or {},
         is_spell_known_available = opts.is_spell_known_available ~= false,
+        locale = opts.locale or "enUS",
     }
 
     _G.unpack = table.unpack
@@ -348,6 +349,9 @@ local function setup_env(opts)
     _G.GetRealmName = function()
         return state.realm_name
     end
+    _G.GetLocale = function()
+        return state.locale
+    end
     _G.GetItemSpell = function(item_id)
         local spell = state.item_spells[item_id]
         if spell then
@@ -382,7 +386,13 @@ local function setup_env(opts)
         if not entry then
             return nil
         end
-        return "SPELL", entry.spellID
+        local book_spell_id = entry.spellID
+        if entry.omitSpellID then
+            book_spell_id = nil
+        elseif entry.bookSpellID ~= nil then
+            book_spell_id = entry.bookSpellID
+        end
+        return entry.spellType or "SPELL", book_spell_id
     end
     _G.GetSpellBookItemName = function(slot, book_type)
         if book_type ~= _G.BOOKTYPE_SPELL then
@@ -883,6 +893,41 @@ run_test("disabled textual feedback suppresses addon feedback but not explicit h
     assert_true(found_help, "explicit help output should still be shown")
 end)
 
+run_test("debug command prints live state even when textual feedback is disabled", function()
+    local state = setup_env({
+        mounts = {
+            { spellID = 4401, name = "Ground Mount", mountType = 0x01 },
+            { spellID = 4402, name = "Flying Mount", mountType = 0x02 },
+        },
+        char_db = {
+            groundMounts = { 4401 },
+            flyingMounts = { 4402 },
+            showTextualFeedback = false,
+        },
+        known_spells = {
+            [34090] = true,
+        },
+        map_id = 111,
+        map_infos = {
+            [111] = { name = "Shattrath City", parentMapID = 101 },
+            [101] = { name = "Outland" },
+        },
+        current_map_area_id = 111,
+        real_zone_text = "Shattrath City",
+        zone_text = "Terrace of Light",
+        is_flyable_area = true,
+    })
+
+    SlashCmdList["ONEBUTTONMOUNT"]("debug")
+
+    local last_line = state.chat[#state.chat]
+    assert_true(type(last_line) == "string", "debug command should print a chat line")
+    assert_true(string.find(last_line, "rz|r=", 1, true) ~= nil, "debug output should include real zone text")
+    assert_true(string.find(last_line, "map|r=", 1, true) ~= nil, "debug output should include map data")
+    assert_true(string.find(last_line, "pools|r=", 1, true) ~= nil, "debug output should include pool counts")
+    assert_true(string.find(last_line, "pick|r=", 1, true) ~= nil, "debug output should include selected pool summary")
+end)
+
 run_test("shift plus button5 keybind is captured as SHIFT-BUTTON5", function()
     local state = setup_env({
         mounts = {
@@ -1114,6 +1159,42 @@ run_test("class mount spells populate from spellbook when IsSpellKnown is unavai
 
     SlashCmdList["ONEBUTTONMOUNT"]("mount")
     assert_equal(state.last_cast_spell_id, 23214, "spellbook fallback mount should summon through spell casting")
+end)
+
+run_test("localized spellbook names still match class mounts without spell IDs", function()
+    local state = setup_env({
+        locale = "deDE",
+        is_spell_known_available = false,
+        spellbook_entries = {
+            { spellID = 23214, omitSpellID = true, name = "Beschworenes Streitross" },
+        },
+        spell_infos = {
+            [23214] = { name = "Beschworenes Streitross", icon = "charger" },
+        },
+        db = {
+            groundMounts = { 23214 },
+            flyingMounts = {},
+        },
+        c_map_enabled = false,
+    })
+
+    SlashCmdList["ONEBUTTONMOUNT"]("")
+
+    local config_frame = _G.OneButtonMountConfigFrame
+    assert_true(config_frame ~= nil, "config frame not created")
+
+    local found_charger = false
+    for _, button in ipairs(config_frame.mountButtons) do
+        if button.mountData and button.mountData.spellID == 23214 then
+            found_charger = true
+            break
+        end
+    end
+
+    assert_true(found_charger, "localized spellbook name should still expose the class mount")
+
+    SlashCmdList["ONEBUTTONMOUNT"]("mount")
+    assert_equal(state.last_cast_spell_id, 23214, "localized spellbook fallback should still summon through spell casting")
 end)
 
 run_test("ground pool skips known flying mounts until the character can fly", function()

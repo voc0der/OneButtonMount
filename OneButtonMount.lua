@@ -82,6 +82,7 @@ local function Print(msg)
 end
 
 local GetCharacterDB
+local SanitizeSavedMountPools
 
 local function ShowTextualFeedback()
     local characterDB = GetCharacterDB()
@@ -234,6 +235,15 @@ local function HasBitFlag(value, flag)
     return (value % (flag + flag)) >= flag
 end
 
+local function IsEnglishClient()
+    if not GetLocale then
+        return true
+    end
+
+    local locale = GetLocale()
+    return locale == "enUS" or locale == "enGB"
+end
+
 local function IsSpellInSpellbook(spellID, fallbackName)
     if not (GetNumSpellTabs and GetSpellTabInfo) then
         return false
@@ -241,13 +251,17 @@ local function IsSpellInSpellbook(spellID, fallbackName)
 
     local bookType = BOOKTYPE_SPELL or "spell"
     local targetSpellID = SafeToNumber(spellID)
-    local targetSpellName = fallbackName
+    local targetSpellName = nil
 
-    if (not targetSpellName or targetSpellName == "") and GetSpellInfo and targetSpellID then
+    if GetSpellInfo and targetSpellID then
         local liveName = GetSpellInfo(targetSpellID)
         if type(liveName) == "string" and liveName ~= "" then
             targetSpellName = liveName
         end
+    end
+
+    if (not targetSpellName or targetSpellName == "") and IsEnglishClient() then
+        targetSpellName = fallbackName
     end
 
     if type(targetSpellName) == "string" then
@@ -307,26 +321,45 @@ local function IsPlayerSpellKnown(spellID, fallbackName)
     return IsSpellInSpellbook(spellID, fallbackName)
 end
 
-local function HasFlyingRidingSkill()
+local function GetFlyingRidingSkillDetails()
     local playerLevel = nil
     if UnitLevel then
         playerLevel = SafeToNumber(UnitLevel("player"))
-        if playerLevel and playerLevel > 0 and playerLevel < FLYING_MOUNT_MIN_LEVEL then
-            return false
-        end
     end
 
-    if IsSpellKnown or IsPlayerSpell or GetNumSpellTabs then
-        local hasExpert = IsPlayerSpellKnown(EXPERT_RIDING, "Expert Riding")
-        local hasArtisan = IsPlayerSpellKnown(ARTISAN_RIDING, "Artisan Riding")
-        if hasExpert or hasArtisan then
-            return true
-        end
+    local hasSpellKnowledgeAPI = IsSpellKnown or IsPlayerSpell or GetNumSpellTabs
+    local hasExpert = false
+    local hasArtisan = false
 
-        return false
+    if hasSpellKnowledgeAPI then
+        hasExpert = IsPlayerSpellKnown(EXPERT_RIDING)
+        hasArtisan = IsPlayerSpellKnown(ARTISAN_RIDING)
     end
 
-    return playerLevel == nil or playerLevel >= FLYING_MOUNT_MIN_LEVEL
+    local levelBlocksFlying = playerLevel and playerLevel > 0 and playerLevel < FLYING_MOUNT_MIN_LEVEL
+    local canRideFlying = not levelBlocksFlying and (not hasSpellKnowledgeAPI or hasExpert or hasArtisan)
+    local ridingLabel = "?"
+    if hasArtisan then
+        ridingLabel = (GetSpellInfo and GetSpellInfo(ARTISAN_RIDING)) or tostring(ARTISAN_RIDING)
+    elseif hasExpert then
+        ridingLabel = (GetSpellInfo and GetSpellInfo(EXPERT_RIDING)) or tostring(EXPERT_RIDING)
+    elseif hasSpellKnowledgeAPI then
+        ridingLabel = "none"
+    end
+
+    return {
+        level = playerLevel,
+        hasExpert = hasExpert,
+        hasArtisan = hasArtisan,
+        hasSpellKnowledgeAPI = not not hasSpellKnowledgeAPI,
+        canRideFlying = canRideFlying,
+        ridingLabel = ridingLabel,
+    }
+end
+
+local function HasFlyingRidingSkill()
+    local ridingDetails = GetFlyingRidingSkillDetails()
+    return ridingDetails.canRideFlying
 end
 
 local function AddNameToSet(nameSet, name)
@@ -353,7 +386,34 @@ local function BuildLocalizedMapNameSet(mapIDs)
         return nameSet
     end
 
-    return OUTLAND_ZONE_NAMES
+    if IsEnglishClient() then
+        return OUTLAND_ZONE_NAMES
+    end
+
+    return {}
+end
+
+local function BuildAQ40ZoneNameSet()
+    local nameSet = {}
+    local addedLocalizedName = false
+
+    if C_Map and C_Map.GetMapInfo then
+        local info = C_Map.GetMapInfo(AQ40_INSTANCE_ID)
+        if info and type(info.name) == "string" and info.name ~= "" then
+            nameSet[info.name] = true
+            addedLocalizedName = true
+        end
+    end
+
+    if addedLocalizedName then
+        return nameSet
+    end
+
+    if IsEnglishClient() then
+        return AQ40_ZONE_NAMES
+    end
+
+    return {}
 end
 
 local function BuildCurrentZoneNameSet()
@@ -408,6 +468,92 @@ local function ZoneNameSetContainsAnyName(zoneNames, candidateNames)
     end
 
     return false
+end
+
+local function IsOutlandMapContext(mapID)
+    if not mapID then
+        return false
+    end
+
+    if OUTLAND_MAP_IDS[mapID] then
+        return true
+    end
+
+    if not (C_Map and C_Map.GetMapInfo) then
+        return false
+    end
+
+    local info = C_Map.GetMapInfo(mapID)
+    while info do
+        if info.mapID == OUTLAND_CONTINENT_MAP_ID or OUTLAND_MAP_IDS[info.mapID] then
+            return true
+        end
+
+        local parentMapID = info.parentMapID
+        if parentMapID and parentMapID ~= 0 then
+            if parentMapID == OUTLAND_CONTINENT_MAP_ID or OUTLAND_MAP_IDS[parentMapID] then
+                return true
+            end
+            info = C_Map.GetMapInfo(parentMapID)
+        else
+            break
+        end
+    end
+
+    return false
+end
+
+local function GetOutlandContextDetails()
+    local zoneNames = BuildCurrentZoneNameSet()
+    local localizedOutlandZoneNames = BuildLocalizedMapNameSet(OUTLAND_MAP_IDS)
+    local bestMapID = nil
+    local areaID = nil
+
+    if C_Map and C_Map.GetBestMapForUnit then
+        bestMapID = SafeToNumber(C_Map.GetBestMapForUnit("player"))
+    end
+
+    if GetCurrentMapAreaID then
+        areaID = SafeToNumber(GetCurrentMapAreaID())
+    end
+
+    local mapIsOutland = IsOutlandMapContext(bestMapID)
+    local mapMatchesZone = false
+    if mapIsOutland then
+        if not next(zoneNames) then
+            mapMatchesZone = true
+        else
+            mapMatchesZone = MapHierarchyContainsAnyName(bestMapID, zoneNames)
+        end
+    end
+
+    local zoneMatchesOutland = ZoneNameSetContainsAnyName(zoneNames, localizedOutlandZoneNames)
+    local areaMatchesOutland = areaID and OUTLAND_MAP_IDS[areaID] and true or false
+
+    local source = "none"
+    local isOutland = false
+    if mapIsOutland and mapMatchesZone then
+        source = "map"
+        isOutland = true
+    elseif zoneMatchesOutland then
+        source = "zone"
+        isOutland = true
+    elseif not next(zoneNames) and areaMatchesOutland then
+        source = "area"
+        isOutland = true
+    end
+
+    return {
+        zoneNames = zoneNames,
+        bestMapID = bestMapID,
+        areaID = areaID,
+        mapIsOutland = mapIsOutland,
+        mapMatchesZone = mapMatchesZone,
+        zoneMatchesOutland = zoneMatchesOutland,
+        areaMatchesOutland = areaMatchesOutland,
+        source = source,
+        isOutland = isOutland,
+    }
 end
 
 -- ============================================================================
@@ -495,9 +641,6 @@ local function ScanMounts()
             local _, _, _, _, _, itemType, itemSubType = GetItemInfo(itemID)
             local mountSubType = GetItemSubClassInfo(miscClassID, mountSubClassID)
             if itemSubType and mountSubType and itemSubType == mountSubType then
-                return true
-            end
-            if itemType and type(itemSubType) == "string" and string.lower(itemSubType) == "mount" then
                 return true
             end
         end
@@ -621,7 +764,7 @@ local function ScanMounts()
     -- appear in companion, journal, or bag-based mount lists.
     if IsSpellKnown or IsPlayerSpell or GetNumSpellTabs then
         for _, spellMount in ipairs(SPELL_MOUNT_SPELLS) do
-            if IsPlayerSpellKnown(spellMount.spellID, spellMount.name) then
+            if IsPlayerSpellKnown(spellMount.spellID) then
                 local spellName = spellMount.name
                 local spellIcon = spellMount.icon
                 if GetSpellInfo then
@@ -642,6 +785,19 @@ local function ScanMounts()
     table.sort(allMounts, function(a, b) return (a.name or "") < (b.name or "") end)
 end
 
+local function GetFlyableAreaSignal()
+    if not IsFlyableArea then
+        return nil, false
+    end
+
+    local ok, flyable = pcall(IsFlyableArea)
+    if not ok then
+        return nil, true
+    end
+
+    return not not flyable, false
+end
+
 local function CanFlyHere()
     -- Must be outdoors and not in an instance
     if IsIndoors() then
@@ -653,77 +809,8 @@ local function CanFlyHere()
         return false
     end
 
-    local function IsOutlandMapContext(mapID)
-        if not mapID then
-            return false
-        end
-
-        if OUTLAND_MAP_IDS[mapID] then
-            return true
-        end
-
-        if not (C_Map and C_Map.GetMapInfo) then
-            return false
-        end
-
-        local info = C_Map.GetMapInfo(mapID)
-        while info do
-            if info.mapID == OUTLAND_CONTINENT_MAP_ID or OUTLAND_MAP_IDS[info.mapID] then
-                return true
-            end
-
-            local parentMapID = info.parentMapID
-            if parentMapID and parentMapID ~= 0 then
-                if parentMapID == OUTLAND_CONTINENT_MAP_ID or OUTLAND_MAP_IDS[parentMapID] then
-                    return true
-                end
-                info = C_Map.GetMapInfo(parentMapID)
-            else
-                break
-            end
-        end
-
-        return false
-    end
-
-    local function IsInOutlandContext()
-        local zoneNames = BuildCurrentZoneNameSet()
-        local localizedOutlandZoneNames = BuildLocalizedMapNameSet(OUTLAND_MAP_IDS)
-
-        -- Prefer map hierarchy when it exists so subzones inherit the correct continent.
-        if C_Map and C_Map.GetBestMapForUnit then
-            local mapID = C_Map.GetBestMapForUnit("player")
-            if IsOutlandMapContext(mapID) then
-                -- Guard against stale positive map IDs by making sure the live
-                -- zone text still matches the resolved map hierarchy when we
-                -- have current zone names to compare against.
-                if not next(zoneNames) or MapHierarchyContainsAnyName(mapID, zoneNames) then
-                    return true
-                end
-            end
-        end
-
-        if ZoneNameSetContainsAnyName(zoneNames, localizedOutlandZoneNames) then
-            return true
-        end
-
-        -- Prefer live zone text over area IDs because GetCurrentMapAreaID can be stale.
-        if next(zoneNames) then
-            return false
-        end
-
-        -- Legacy fallback: some clients can resolve areaID even when text/map APIs are unavailable.
-        if GetCurrentMapAreaID then
-            local areaID = GetCurrentMapAreaID()
-            if areaID and OUTLAND_MAP_IDS[areaID] then
-                return true
-            end
-        end
-
-        return false
-    end
-
-    if not IsInOutlandContext() then
+    local outlandContext = GetOutlandContextDetails()
+    if not outlandContext.isOutland then
         return false
     end
 
@@ -731,11 +818,9 @@ local function CanFlyHere()
         return false
     end
 
-    if IsFlyableArea then
-        local ok, flyable = pcall(IsFlyableArea)
-        if ok and flyable then
-            return true
-        end
+    local flyableSignal = GetFlyableAreaSignal()
+    if flyableSignal then
+        return true
     end
 
     return true
@@ -751,20 +836,22 @@ local function GetMountBySpellID(spellID)
 end
 
 local function IsInAQ40()
+    local localizedAQ40ZoneNames = BuildAQ40ZoneNameSet()
+
     if GetInstanceInfo then
         local name, instanceType, difficultyID, difficultyName, maxPlayers, dynamicDifficulty, isDynamic, instanceID = GetInstanceInfo()
         if SafeToNumber(instanceID) == AQ40_INSTANCE_ID then
             return true
         end
 
-        if instanceType == "raid" and name and AQ40_ZONE_NAMES[name] then
+        if instanceType == "raid" and name and localizedAQ40ZoneNames[name] then
             return true
         end
     end
 
     -- Fallback when instance APIs are unavailable or incomplete.
     local zone = GetRealZoneText and GetRealZoneText()
-    if zone and AQ40_ZONE_NAMES[zone] then
+    if zone and localizedAQ40ZoneNames[zone] then
         local inInstance = IsInInstance and select(1, IsInInstance())
         if inInstance then
             return true
@@ -783,45 +870,27 @@ local function IsAQ40CrystalMount(mount)
         return true
     end
 
-    local mountName = string.lower(mount.name or "")
-    if mountName == "" and GetSpellInfo and mount.spellID then
-        local spellName = GetSpellInfo(mount.spellID)
-        if type(spellName) == "string" then
-            mountName = string.lower(spellName)
-        end
-    end
-
-    if mountName ~= "" and string.find(mountName, "qiraji", 1, true) then
-        if string.find(mountName, "resonating crystal", 1, true) then
-            return true
-        end
-
-        if string.find(mountName, "battle tank", 1, true) then
-            return true
-        end
-    end
-
     return false
+end
+
+local function FilterEligibleSpellIDs(sourcePool, includeAQ40Crystals, canFlyHere)
+    local filtered = {}
+    for _, spellID in ipairs(sourcePool) do
+        local mount = GetMountBySpellID(spellID)
+        if mount then
+            local isAQ40Crystal = IsAQ40CrystalMount(mount)
+            local isUsableFlyingMount = not mount.canDetermineFlying or not mount.isFlying or canFlyHere
+            if includeAQ40Crystals == isAQ40Crystal and isUsableFlyingMount then
+                table.insert(filtered, spellID)
+            end
+        end
+    end
+    return filtered
 end
 
 local function BuildEligibleMountPool()
     local groundMounts, flyingMounts = GetMountPools()
     local canFlyHere = CanFlyHere()
-
-    local function FilterPool(sourcePool, includeAQ40Crystals)
-        local filtered = {}
-        for _, spellID in ipairs(sourcePool) do
-            local mount = GetMountBySpellID(spellID)
-            if mount then
-                local isAQ40Crystal = IsAQ40CrystalMount(mount)
-                local isUsableFlyingMount = not mount.canDetermineFlying or not mount.isFlying or canFlyHere
-                if includeAQ40Crystals == isAQ40Crystal and isUsableFlyingMount then
-                    table.insert(filtered, spellID)
-                end
-            end
-        end
-        return filtered
-    end
 
     if IsInAQ40() then
         local mergedPool = {}
@@ -839,7 +908,7 @@ local function BuildEligibleMountPool()
             end
         end
 
-        local aq40Pool = FilterPool(mergedPool, true)
+        local aq40Pool = FilterEligibleSpellIDs(mergedPool, true, canFlyHere)
         if #aq40Pool > 0 then
             return aq40Pool, nil
         end
@@ -855,13 +924,13 @@ local function BuildEligibleMountPool()
     end
 
     local primaryPool, secondaryPool = SelectPrimaryAndSecondaryPools()
-    local primaryEligible = FilterPool(primaryPool, false)
+    local primaryEligible = FilterEligibleSpellIDs(primaryPool, false, canFlyHere)
     if #primaryEligible > 0 then
         return primaryEligible, nil
     end
 
     if secondaryPool and #secondaryPool > 0 then
-        local secondaryEligible = FilterPool(secondaryPool, false)
+        local secondaryEligible = FilterEligibleSpellIDs(secondaryPool, false, canFlyHere)
         if #secondaryEligible > 0 then
             return secondaryEligible, nil
         end
@@ -872,6 +941,174 @@ local function BuildEligibleMountPool()
     end
 
     return nil, "No eligible mounts here. Qiraji crystals are AQ40-only."
+end
+
+local function DebugLabel(text)
+    return "|cff88ccff" .. text .. "|r"
+end
+
+local function DebugValue(value)
+    if value == nil then
+        return "|cff999999?|r"
+    end
+
+    local text = tostring(value)
+    if text == "" then
+        return "|cff999999-|r"
+    end
+
+    return text
+end
+
+local function DebugBool(value)
+    if value == nil then
+        return "|cff999999?|r"
+    end
+
+    if value then
+        return "|cff66ff66Y|r"
+    end
+
+    return "|cffff6666N|r"
+end
+
+local function BuildMapHierarchyDebugString(mapID)
+    if not mapID then
+        return DebugValue(nil)
+    end
+
+    if not (C_Map and C_Map.GetMapInfo) then
+        return tostring(mapID)
+    end
+
+    local parts = {}
+    local visited = {}
+    local currentMapID = mapID
+
+    while currentMapID and not visited[currentMapID] do
+        visited[currentMapID] = true
+        local info = C_Map.GetMapInfo(currentMapID)
+        if not info then
+            table.insert(parts, tostring(currentMapID))
+            break
+        end
+
+        local mapName = info.name
+        if type(mapName) ~= "string" or mapName == "" then
+            mapName = "?"
+        end
+
+        table.insert(parts, tostring(currentMapID) .. ":" .. mapName)
+
+        local parentMapID = SafeToNumber(info.parentMapID)
+        if parentMapID and parentMapID ~= 0 then
+            currentMapID = parentMapID
+        else
+            break
+        end
+    end
+
+    return table.concat(parts, ">")
+end
+
+local function SummarizeMountPool(pool, maxEntries)
+    if not pool or #pool == 0 then
+        return "-"
+    end
+
+    local names = {}
+    local limit = math.min(#pool, maxEntries or 2)
+    for i = 1, limit do
+        local mount = GetMountBySpellID(pool[i])
+        table.insert(names, mount and (mount.name or tostring(pool[i])) or tostring(pool[i]))
+    end
+
+    if #pool > limit then
+        table.insert(names, "+" .. tostring(#pool - limit))
+    end
+
+    return table.concat(names, ",")
+end
+
+local function PrintDebugSummary()
+    ScanMounts()
+    SanitizeSavedMountPools()
+
+    local outlandContext = GetOutlandContextDetails()
+    local riding = GetFlyingRidingSkillDetails()
+    local flyableSignal, flyableSignalErrored = GetFlyableAreaSignal()
+    local canFlyHere = CanFlyHere()
+    local inAQ40 = IsInAQ40()
+    local indoors = IsIndoors()
+    local inInstance = IsInInstance()
+    local realZoneText = GetRealZoneText and GetRealZoneText() or nil
+    local zoneText = GetZoneText and GetZoneText() or nil
+    local groundMounts, flyingMounts = GetMountPools()
+    local eligibleGround = FilterEligibleSpellIDs(groundMounts, false, canFlyHere)
+    local eligibleFlying = FilterEligibleSpellIDs(flyingMounts, false, canFlyHere)
+    local eligiblePool, poolError = BuildEligibleMountPool()
+
+    local pickLabel = "none"
+    if inAQ40 then
+        local mergedPool = {}
+        local seen = {}
+        for _, spellID in ipairs(groundMounts) do
+            if not seen[spellID] then
+                seen[spellID] = true
+                table.insert(mergedPool, spellID)
+            end
+        end
+        for _, spellID in ipairs(flyingMounts) do
+            if not seen[spellID] then
+                seen[spellID] = true
+                table.insert(mergedPool, spellID)
+            end
+        end
+
+        local aq40Eligible = FilterEligibleSpellIDs(mergedPool, true, canFlyHere)
+        if #aq40Eligible > 0 then
+            pickLabel = "AQ40(" .. tostring(#aq40Eligible) .. ")[" .. SummarizeMountPool(aq40Eligible, 2) .. "]"
+        else
+            pickLabel = "AQ40(none)"
+        end
+    elseif canFlyHere and #flyingMounts > 0 then
+        if #eligibleFlying > 0 then
+            pickLabel = "F(" .. tostring(#eligibleFlying) .. ")[" .. SummarizeMountPool(eligibleFlying, 2) .. "]"
+        elseif #eligibleGround > 0 then
+            pickLabel = "Gfb(" .. tostring(#eligibleGround) .. ")[" .. SummarizeMountPool(eligibleGround, 2) .. "]"
+        end
+    elseif #eligibleGround > 0 then
+        pickLabel = "G(" .. tostring(#eligibleGround) .. ")[" .. SummarizeMountPool(eligibleGround, 2) .. "]"
+    end
+
+    local flyableSummary = DebugBool(flyableSignal)
+    if flyableSignalErrored then
+        flyableSummary = "|cffffaa00ERR|r"
+    end
+
+    local segments = {
+        DebugLabel("rz") .. "=" .. DebugValue(realZoneText),
+        DebugLabel("z") .. "=" .. DebugValue(zoneText),
+        DebugLabel("map") .. "=" .. BuildMapHierarchyDebugString(outlandContext.bestMapID),
+        DebugLabel("area") .. "=" .. DebugValue(outlandContext.areaID),
+        DebugLabel("outland") .. "=" .. DebugBool(outlandContext.isOutland) .. "(" .. outlandContext.source .. ")",
+        DebugLabel("match") .. "=m" .. DebugBool(outlandContext.mapIsOutland) .. "/z" .. DebugBool(outlandContext.zoneMatchesOutland) .. "/a" .. DebugBool(outlandContext.areaMatchesOutland),
+        DebugLabel("state") .. "=indoor:" .. DebugBool(indoors) .. ",inst:" .. DebugBool(inInstance) .. ",aq40:" .. DebugBool(inAQ40),
+        DebugLabel("ride") .. "=" .. DebugValue(riding.ridingLabel) .. "@lvl" .. DebugValue(riding.level),
+        DebugLabel("flyable") .. "=" .. flyableSummary,
+        DebugLabel("canFly") .. "=" .. DebugBool(canFlyHere),
+        DebugLabel("pools") .. "=G" .. tostring(#groundMounts) .. "/F" .. tostring(#flyingMounts) .. "/all" .. tostring(#allMounts),
+        DebugLabel("eligible") .. "=G" .. tostring(#eligibleGround) .. "/F" .. tostring(#eligibleFlying),
+        DebugLabel("pick") .. "=" .. DebugValue(pickLabel),
+    }
+
+    if eligiblePool and #eligiblePool > 0 then
+        table.insert(segments, DebugLabel("pool") .. "=" .. SummarizeMountPool(eligiblePool, 3))
+    elseif poolError then
+        table.insert(segments, DebugLabel("err") .. "=" .. DebugValue(poolError))
+    end
+
+    Print(table.concat(segments, " | "))
 end
 
 local function BuildMountLookup()
@@ -897,7 +1134,7 @@ local function SanitizePool(pool, requireFlying, mountLookup)
     return cleaned
 end
 
-local function SanitizeSavedMountPools()
+SanitizeSavedMountPools = function()
     local characterDB = GetCharacterDB()
 
     local mountLookup = BuildMountLookup()
@@ -1784,11 +2021,14 @@ SlashCmdList["ONEBUTTONMOUNT"] = function(msg)
         Print("  /obm - Short alias")
         Print("  /obm minimap - Toggle minimap button")
         Print("  /obm mount - Summon a random mount")
+        Print("  /obm debug - Print live mount-selection state")
         Print("  /obm help - Show this help")
     elseif cmd == "minimap" or cmd == "mm" then
         OneButtonMount:ToggleMinimapButton()
     elseif cmd == "mount" or cmd == "go" then
         SummonRandomMount()
+    elseif cmd == "debug" or cmd == "diag" then
+        PrintDebugSummary()
     elseif cmd == "config" or cmd == "ui" or cmd == "gui" then
         OneButtonMount:ShowConfigUI()
     else
