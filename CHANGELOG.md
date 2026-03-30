@@ -1,5 +1,7 @@
 ## [Unreleased]
 
+## [1.0.18] - 2026-03-30
+
 ### Added
 - Added paladin and warlock class-mount spells to the selectable mount list so Summon Warhorse, Summon Charger, Summon Felsteed, and Summon Dreadsteed can be saved into mount rotations
 
