@@ -1,5 +1,9 @@
 ## [Unreleased]
 
+### Fixed
+- Added spellbook-based known-spell fallback so paladin and warlock class mounts still appear in the selectable pool on TBC clients where `IsSpellKnown()` does not expose those spells reliably
+- Reused the same spellbook fallback for riding-skill checks so flying eligibility no longer depends on a single spell-knowledge API
+
 ## [1.0.18] - 2026-03-30
 
 ### Added

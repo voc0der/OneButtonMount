@@ -234,6 +234,79 @@ local function HasBitFlag(value, flag)
     return (value % (flag + flag)) >= flag
 end
 
+local function IsSpellInSpellbook(spellID, fallbackName)
+    if not (GetNumSpellTabs and GetSpellTabInfo) then
+        return false
+    end
+
+    local bookType = BOOKTYPE_SPELL or "spell"
+    local targetSpellID = SafeToNumber(spellID)
+    local targetSpellName = fallbackName
+
+    if (not targetSpellName or targetSpellName == "") and GetSpellInfo and targetSpellID then
+        local liveName = GetSpellInfo(targetSpellID)
+        if type(liveName) == "string" and liveName ~= "" then
+            targetSpellName = liveName
+        end
+    end
+
+    if type(targetSpellName) == "string" then
+        targetSpellName = string.lower(targetSpellName)
+    else
+        targetSpellName = nil
+    end
+
+    local highestSlot = 0
+    local numTabs = SafeToNumber(GetNumSpellTabs()) or 0
+    for tabIndex = 1, numTabs do
+        local _, _, offset, numSpells = GetSpellTabInfo(tabIndex)
+        local tabEnd = (SafeToNumber(offset) or 0) + (SafeToNumber(numSpells) or 0)
+        if tabEnd > highestSlot then
+            highestSlot = tabEnd
+        end
+    end
+
+    if highestSlot == 0 then
+        return false
+    end
+
+    for slot = 1, highestSlot do
+        if GetSpellBookItemInfo and targetSpellID then
+            local spellType, bookSpellID = GetSpellBookItemInfo(slot, bookType)
+            if spellType == "SPELL" and SafeToNumber(bookSpellID) == targetSpellID then
+                return true
+            end
+        end
+
+        if targetSpellName then
+            local bookSpellName = nil
+            if GetSpellBookItemName then
+                bookSpellName = GetSpellBookItemName(slot, bookType)
+            elseif GetSpellName then
+                bookSpellName = GetSpellName(slot, bookType)
+            end
+
+            if type(bookSpellName) == "string" and string.lower(bookSpellName) == targetSpellName then
+                return true
+            end
+        end
+    end
+
+    return false
+end
+
+local function IsPlayerSpellKnown(spellID, fallbackName)
+    if IsSpellKnown and IsSpellKnown(spellID) then
+        return true
+    end
+
+    if IsPlayerSpell and IsPlayerSpell(spellID) then
+        return true
+    end
+
+    return IsSpellInSpellbook(spellID, fallbackName)
+end
+
 local function HasFlyingRidingSkill()
     local playerLevel = nil
     if UnitLevel then
@@ -243,9 +316,9 @@ local function HasFlyingRidingSkill()
         end
     end
 
-    if IsSpellKnown then
-        local hasExpert = IsSpellKnown(EXPERT_RIDING)
-        local hasArtisan = IsSpellKnown(ARTISAN_RIDING)
+    if IsSpellKnown or IsPlayerSpell or GetNumSpellTabs then
+        local hasExpert = IsPlayerSpellKnown(EXPERT_RIDING, "Expert Riding")
+        local hasArtisan = IsPlayerSpellKnown(ARTISAN_RIDING, "Artisan Riding")
         if hasExpert or hasArtisan then
             return true
         end
@@ -546,9 +619,9 @@ local function ScanMounts()
 
     -- Paladin and warlock class mounts are cast directly and do not always
     -- appear in companion, journal, or bag-based mount lists.
-    if IsSpellKnown then
+    if IsSpellKnown or IsPlayerSpell or GetNumSpellTabs then
         for _, spellMount in ipairs(SPELL_MOUNT_SPELLS) do
-            if IsSpellKnown(spellMount.spellID) then
+            if IsPlayerSpellKnown(spellMount.spellID, spellMount.name) then
                 local spellName = spellMount.name
                 local spellIcon = spellMount.icon
                 if GetSpellInfo then

@@ -60,6 +60,9 @@ local function setup_env(opts)
         player_name = opts.player_name or "TestPlayer",
         realm_name = opts.realm_name or "TestRealm",
         spell_infos = opts.spell_infos or {},
+        spellbook_entries = opts.spellbook_entries or {},
+        player_spells = opts.player_spells or {},
+        is_spell_known_available = opts.is_spell_known_available ~= false,
     }
 
     _G.unpack = table.unpack
@@ -211,6 +214,7 @@ local function setup_env(opts)
     _G.ElvUI = nil
     _G.LE_ITEM_CLASS_MISCELLANEOUS = 15
     _G.LE_ITEM_MISCELLANEOUS_MOUNT = 5
+    _G.BOOKTYPE_SPELL = "spell"
     _G.Enum = {
         MountType = {
             Flying = 1,
@@ -294,8 +298,15 @@ local function setup_env(opts)
         end
         return nil
     end
-    _G.IsSpellKnown = function(spell_id)
-        return state.known_spells[spell_id] or false
+    if state.is_spell_known_available then
+        _G.IsSpellKnown = function(spell_id)
+            return state.known_spells[spell_id] or false
+        end
+    else
+        _G.IsSpellKnown = nil
+    end
+    _G.IsPlayerSpell = function(spell_id)
+        return state.player_spells[spell_id] or false
     end
     _G.SetOverrideBindingClick = function(_, is_priority, key, button_name, mouse_button)
         state.binding_clicks[#state.binding_clicks + 1] = {
@@ -350,6 +361,38 @@ local function setup_env(opts)
             return item_id, nil, nil, nil, nil, nil, nil
         end
         return item_id, info.itemType, info.itemSubType, nil, info.icon, info.classID, info.subClassID
+    end
+    _G.GetNumSpellTabs = function()
+        if #state.spellbook_entries > 0 then
+            return 1
+        end
+        return 0
+    end
+    _G.GetSpellTabInfo = function(index)
+        if index == 1 and #state.spellbook_entries > 0 then
+            return "General", nil, 0, #state.spellbook_entries
+        end
+        return nil
+    end
+    _G.GetSpellBookItemInfo = function(slot, book_type)
+        if book_type ~= _G.BOOKTYPE_SPELL then
+            return nil
+        end
+        local entry = state.spellbook_entries[slot]
+        if not entry then
+            return nil
+        end
+        return "SPELL", entry.spellID
+    end
+    _G.GetSpellBookItemName = function(slot, book_type)
+        if book_type ~= _G.BOOKTYPE_SPELL then
+            return nil
+        end
+        local entry = state.spellbook_entries[slot]
+        if not entry then
+            return nil
+        end
+        return entry.name
     end
     _G.GetItemInfo = function(item_id)
         local info = state.item_infos[item_id]
@@ -1038,6 +1081,41 @@ run_test("class mount spells populate available mounts and summon by spell", fun
     assert_equal(state.last_cast_spell_id, 13819, "class mount should summon through spell casting")
 end)
 
+run_test("class mount spells populate from spellbook when IsSpellKnown is unavailable", function()
+    local state = setup_env({
+        is_spell_known_available = false,
+        spellbook_entries = {
+            { spellID = 23214, name = "Summon Charger" },
+        },
+        spell_infos = {
+            [23214] = { name = "Summon Charger", icon = "charger" },
+        },
+        db = {
+            groundMounts = { 23214 },
+            flyingMounts = {},
+        },
+        c_map_enabled = false,
+    })
+
+    SlashCmdList["ONEBUTTONMOUNT"]("")
+
+    local config_frame = _G.OneButtonMountConfigFrame
+    assert_true(config_frame ~= nil, "config frame not created")
+
+    local found_charger = false
+    for _, button in ipairs(config_frame.mountButtons) do
+        if button.mountData and button.mountData.spellID == 23214 then
+            found_charger = true
+            break
+        end
+    end
+
+    assert_true(found_charger, "charger should appear in the available mount list from spellbook fallback")
+
+    SlashCmdList["ONEBUTTONMOUNT"]("mount")
+    assert_equal(state.last_cast_spell_id, 23214, "spellbook fallback mount should summon through spell casting")
+end)
+
 run_test("ground pool skips known flying mounts until the character can fly", function()
     local state = setup_env({
         mounts = {
@@ -1058,6 +1136,53 @@ run_test("ground pool skips known flying mounts until the character can fly", fu
     SlashCmdList["ONEBUTTONMOUNT"]("mount")
 
     assert_equal(state.last_call_companion_index, 1, "known flying mounts in the ground pool should be skipped until the character can ride them")
+end)
+
+run_test("spellbook fallback keeps ground mounts selected until riding is learned", function()
+    local state = setup_env({
+        is_spell_known_available = false,
+        mounts = {
+            { spellID = 2121, name = "Ground Mount", mountType = 0x01 },
+            { spellID = 3121, name = "Flying Mount", mountType = 0x02 },
+        },
+        db = {
+            groundMounts = { 2121 },
+            flyingMounts = { 3121 },
+        },
+        player_level = 70,
+        is_flyable_area = true,
+        c_map_enabled = false,
+        real_zone_text = "Nagrand",
+    })
+
+    SlashCmdList["ONEBUTTONMOUNT"]("mount")
+
+    assert_equal(state.last_call_companion_index, 1, "without a known riding spell in the spellbook fallback, the addon should stay on ground mounts")
+end)
+
+run_test("spellbook fallback allows flying once riding is present", function()
+    local state = setup_env({
+        is_spell_known_available = false,
+        mounts = {
+            { spellID = 2131, name = "Ground Mount", mountType = 0x01 },
+            { spellID = 3131, name = "Flying Mount", mountType = 0x02 },
+        },
+        db = {
+            groundMounts = { 2131 },
+            flyingMounts = { 3131 },
+        },
+        player_level = 70,
+        spellbook_entries = {
+            { spellID = 34090, name = "Expert Riding" },
+        },
+        is_flyable_area = true,
+        c_map_enabled = false,
+        real_zone_text = "Nagrand",
+    })
+
+    SlashCmdList["ONEBUTTONMOUNT"]("mount")
+
+    assert_equal(state.last_call_companion_index, 2, "riding found via spellbook fallback should allow the flying pool")
 end)
 
 run_test("non-flying mounts cannot be added to flying rotation", function()
