@@ -1,5 +1,12 @@
 ## [Unreleased]
 
+### Added
+- Added paladin and warlock class-mount spells to the selectable mount list so Summon Warhorse, Summon Charger, Summon Felsteed, and Summon Dreadsteed can be saved into mount rotations
+
+### Fixed
+- Prevented known flying mounts from being selected when the character cannot currently use flying, even if those mounts were saved in a rotation pool
+- Stopped `IsFlyableArea()` from bypassing the character's riding-skill and level checks when deciding whether flying mounts are eligible
+
 ## [1.0.17] - 2026-03-29
 
 ### Fixed
