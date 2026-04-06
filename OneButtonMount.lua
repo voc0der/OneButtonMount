@@ -44,8 +44,16 @@ local CHARACTER_PROFILE_VERSION = 2
 local SPELL_MOUNT_SPELLS = {
     { spellID = 13819, name = "Summon Warhorse", icon = "Interface\\Icons\\Spell_Nature_Swiftness", isFlying = false },
     { spellID = 23214, name = "Summon Charger", icon = "Interface\\Icons\\Ability_Mount_Charger", isFlying = false },
+    { spellID = 34769, name = "Summon Thalassian Warhorse", icon = "Interface\\Icons\\Spell_Nature_Swiftness", isFlying = false },
+    { spellID = 34767, name = "Summon Thalassian Charger", icon = "Interface\\Icons\\Ability_Mount_Charger", isFlying = false },
     { spellID = 5784, name = "Summon Felsteed", icon = "Interface\\Icons\\Spell_Nature_Swiftness", isFlying = false },
     { spellID = 23161, name = "Summon Dreadsteed", icon = "Interface\\Icons\\Ability_Mount_Dreadsteed", isFlying = false },
+}
+local SPELL_MOUNT_ALIASES = {
+    [13819] = { 13819, 34769 },
+    [34769] = { 13819, 34769 },
+    [23214] = { 23214, 34767 },
+    [34767] = { 23214, 34767 },
 }
 
 -- Mount type flags from GetCompanionInfo's 6th return value
@@ -244,9 +252,9 @@ local function IsEnglishClient()
     return locale == "enUS" or locale == "enGB"
 end
 
-local function IsSpellInSpellbook(spellID, fallbackName)
+local function ResolveSpellbookSpellID(spellID, fallbackName)
     if not (GetNumSpellTabs and GetSpellTabInfo) then
-        return false
+        return nil
     end
 
     local bookType = BOOKTYPE_SPELL or "spell"
@@ -281,14 +289,14 @@ local function IsSpellInSpellbook(spellID, fallbackName)
     end
 
     if highestSlot == 0 then
-        return false
+        return nil
     end
 
     for slot = 1, highestSlot do
         if GetSpellBookItemInfo and targetSpellID then
             local spellType, bookSpellID = GetSpellBookItemInfo(slot, bookType)
             if spellType == "SPELL" and SafeToNumber(bookSpellID) == targetSpellID then
-                return true
+                return targetSpellID
             end
         end
 
@@ -301,24 +309,42 @@ local function IsSpellInSpellbook(spellID, fallbackName)
             end
 
             if type(bookSpellName) == "string" and string.lower(bookSpellName) == targetSpellName then
-                return true
+                local spellType = nil
+                local bookSpellID = nil
+                if GetSpellBookItemInfo then
+                    spellType, bookSpellID = GetSpellBookItemInfo(slot, bookType)
+                end
+                if spellType == "SPELL" and SafeToNumber(bookSpellID) then
+                    return SafeToNumber(bookSpellID)
+                end
+
+                return targetSpellID
             end
         end
     end
 
-    return false
+    return nil
+end
+
+local function ResolvePlayerSpellID(spellID, fallbackName)
+    local normalizedSpellID = SafeToNumber(spellID)
+    if not normalizedSpellID then
+        return nil
+    end
+
+    if IsSpellKnown and IsSpellKnown(normalizedSpellID) then
+        return normalizedSpellID
+    end
+
+    if IsPlayerSpell and IsPlayerSpell(normalizedSpellID) then
+        return normalizedSpellID
+    end
+
+    return ResolveSpellbookSpellID(normalizedSpellID, fallbackName)
 end
 
 local function IsPlayerSpellKnown(spellID, fallbackName)
-    if IsSpellKnown and IsSpellKnown(spellID) then
-        return true
-    end
-
-    if IsPlayerSpell and IsPlayerSpell(spellID) then
-        return true
-    end
-
-    return IsSpellInSpellbook(spellID, fallbackName)
+    return ResolvePlayerSpellID(spellID, fallbackName) ~= nil
 end
 
 local function GetFlyingRidingSkillDetails()
@@ -764,11 +790,15 @@ local function ScanMounts()
     -- appear in companion, journal, or bag-based mount lists.
     if IsSpellKnown or IsPlayerSpell or GetNumSpellTabs then
         for _, spellMount in ipairs(SPELL_MOUNT_SPELLS) do
-            if IsPlayerSpellKnown(spellMount.spellID) then
+            local resolvedSpellID = ResolvePlayerSpellID(spellMount.spellID, spellMount.name)
+            if resolvedSpellID then
                 local spellName = spellMount.name
                 local spellIcon = spellMount.icon
                 if GetSpellInfo then
-                    local liveName, _, liveIcon = GetSpellInfo(spellMount.spellID)
+                    local liveName, _, liveIcon = GetSpellInfo(resolvedSpellID)
+                    if not liveName and resolvedSpellID ~= spellMount.spellID then
+                        liveName, _, liveIcon = GetSpellInfo(spellMount.spellID)
+                    end
                     if liveName then
                         spellName = liveName
                     end
@@ -777,7 +807,7 @@ local function ScanMounts()
                     end
                 end
 
-                AddMountEntry(spellMount.spellID, spellName, spellIcon, spellMount.isFlying, true, nil, nil, nil)
+                AddMountEntry(resolvedSpellID, spellName, spellIcon, spellMount.isFlying, true, nil, nil, nil)
             end
         end
     end
@@ -1119,15 +1149,38 @@ local function BuildMountLookup()
     return lookup
 end
 
+local function ResolveSavedSpellID(spellID, mountLookup)
+    local normalizedSpellID = SafeToNumber(spellID)
+    if not normalizedSpellID then
+        return nil
+    end
+
+    if mountLookup[normalizedSpellID] then
+        return normalizedSpellID
+    end
+
+    local aliases = SPELL_MOUNT_ALIASES[normalizedSpellID]
+    if aliases then
+        for _, aliasSpellID in ipairs(aliases) do
+            if mountLookup[aliasSpellID] then
+                return aliasSpellID
+            end
+        end
+    end
+
+    return nil
+end
+
 local function SanitizePool(pool, requireFlying, mountLookup)
     local cleaned = {}
     local seen = {}
 
     for _, spellID in ipairs(pool) do
-        local mount = mountLookup[spellID]
-        if mount and (not requireFlying or not mount.canDetermineFlying or mount.isFlying) and not seen[spellID] then
-            table.insert(cleaned, spellID)
-            seen[spellID] = true
+        local resolvedSpellID = ResolveSavedSpellID(spellID, mountLookup)
+        local mount = resolvedSpellID and mountLookup[resolvedSpellID] or nil
+        if mount and (not requireFlying or not mount.canDetermineFlying or mount.isFlying) and not seen[resolvedSpellID] then
+            table.insert(cleaned, resolvedSpellID)
+            seen[resolvedSpellID] = true
         end
     end
 

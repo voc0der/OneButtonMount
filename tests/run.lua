@@ -1165,12 +1165,16 @@ run_test("class mount spells populate available mounts and summon by spell", fun
         known_spells = {
             [13819] = true,
             [23214] = true,
+            [34769] = true,
+            [34767] = true,
             [5784] = true,
             [23161] = true,
         },
         spell_infos = {
             [13819] = { name = "Summon Warhorse", icon = "warhorse" },
             [23214] = { name = "Summon Charger", icon = "charger" },
+            [34769] = { name = "Summon Thalassian Warhorse", icon = "thalassianwarhorse" },
+            [34767] = { name = "Summon Thalassian Charger", icon = "thalassiancharger" },
             [5784] = { name = "Summon Felsteed", icon = "felsteed" },
             [23161] = { name = "Summon Dreadsteed", icon = "dreadsteed" },
         },
@@ -1195,11 +1199,56 @@ run_test("class mount spells populate available mounts and summon by spell", fun
 
     assert_true(found_spells[13819], "warhorse should appear in the available mount list")
     assert_true(found_spells[23214], "charger should appear in the available mount list")
+    assert_true(found_spells[34769], "thalassian warhorse should appear in the available mount list")
+    assert_true(found_spells[34767], "thalassian charger should appear in the available mount list")
     assert_true(found_spells[5784], "felsteed should appear in the available mount list")
     assert_true(found_spells[23161], "dreadsteed should appear in the available mount list")
 
     trigger_secure_mount(state)
     assert_equal(state.last_cast_spell_id, 13819, "class mount should summon through spell casting")
+end)
+
+run_test("blood elf paladin class mounts resolve to learned spell IDs and remap saved pools", function()
+    local state = setup_env({
+        is_spell_known_available = false,
+        spellbook_entries = {
+            { spellID = 34769, name = "Summon Warhorse" },
+        },
+        spell_infos = {
+            [13819] = { name = "Summon Warhorse", icon = "warhorse" },
+            [34769] = { name = "Summon Warhorse", icon = "thalassianwarhorse" },
+        },
+        char_db = {
+            groundMounts = { 13819 },
+            flyingMounts = {},
+        },
+        c_map_enabled = false,
+    })
+
+    assert_equal(_G.OneButtonMountCharDB.groundMounts[1], 34769, "saved paladin class mount should remap to the learned spell ID")
+    assert_equal(#_G.OneButtonMountCharDB.groundMounts, 1, "remapped ground pool should keep a single entry")
+
+    SlashCmdList["ONEBUTTONMOUNT"]("")
+
+    local config_frame = _G.OneButtonMountConfigFrame
+    assert_true(config_frame ~= nil, "config frame not created")
+
+    local found_warhorse = false
+    for _, button in ipairs(config_frame.mountButtons) do
+        if button.mountData and button.mountData.spellID == 34769 then
+            found_warhorse = true
+            break
+        end
+    end
+
+    assert_true(found_warhorse, "blood elf paladin mount should appear with its learned spell ID")
+
+    local minimap_button = _G.OneButtonMountMinimapButton
+    assert_true(minimap_button ~= nil, "minimap button not created")
+
+    state.last_cast_spell_id = nil
+    minimap_button.scripts["OnClick"](minimap_button, "RightButton")
+    assert_equal(state.last_cast_spell_id, 34769, "direct summon path should cast the learned blood elf paladin spell ID")
 end)
 
 run_test("mount slash command is no longer supported", function()
