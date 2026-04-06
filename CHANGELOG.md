@@ -1,5 +1,11 @@
 ## [Unreleased]
 
+## [1.0.22] - 2026-04-06
+
+### Fixed
+- Resolved blood elf paladin class mounts to their learned spell IDs so Thalassian Warhorse and Thalassian Charger work cleanly in both secure and direct summon paths
+- Remapped saved paladin class-mount spell IDs to the learned faction variant during pool sanitization so older saved rotations keep working after the update
+
 ## [1.0.21] - 2026-03-30
 
 ### Fixed

@@ -9,7 +9,7 @@
 - Supports direct keybind and mouse-chord summoning from the addon settings
 - Stores mount rotations and addon settings per character
 
-Current version: `1.0.21`
+Current version: `1.0.22`
 
 ## Config UI
 
