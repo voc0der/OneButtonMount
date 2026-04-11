@@ -1,5 +1,11 @@
 ## [Unreleased]
 
+## [1.0.23] - 2026-04-11
+
+### Fixed
+- Added mouse wheel capture to the keybind overlay so `MOUSEWHEELUP`, `MOUSEWHEELDOWN`, and modifier chords such as `SHIFT-MOUSEWHEELUP` can be bound from the config UI
+- Added regression coverage for `Shift + Mouse Wheel Up` and `Shift + Mouse Wheel Down` binding capture
+
 ## [1.0.22] - 2026-04-06
 
 ### Fixed

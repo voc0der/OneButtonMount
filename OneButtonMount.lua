@@ -1297,6 +1297,18 @@ local function NormalizeMouseBindingToken(button)
     return nil
 end
 
+local function NormalizeMouseWheelBindingToken(delta)
+    if type(delta) ~= "number" or delta == 0 then
+        return nil
+    end
+
+    if delta > 0 then
+        return "MOUSEWHEELUP"
+    end
+
+    return "MOUSEWHEELDOWN"
+end
+
 local function SetMountKeybind(key)
     local characterDB = GetCharacterDB()
 
@@ -1674,6 +1686,7 @@ function OneButtonMount:CreateConfigUI()
     keyCaptureFrame:SetFrameStrata("TOOLTIP")
     keyCaptureFrame:EnableKeyboard(true)
     keyCaptureFrame:EnableMouse(true)
+    keyCaptureFrame:EnableMouseWheel(true)
     keyCaptureFrame:RegisterForClicks("AnyDown", "AnyUp")
     if keyCaptureFrame.SetPropagateKeyboardInput then
         keyCaptureFrame:SetPropagateKeyboardInput(false)
@@ -1731,6 +1744,11 @@ function OneButtonMount:CreateConfigUI()
             local mouseToken = NormalizeMouseBindingToken(button)
             ApplyCapturedBinding(mouseToken)
         end
+    end)
+
+    keyCaptureFrame:SetScript("OnMouseWheel", function(_, delta)
+        local mouseWheelToken = NormalizeMouseWheelBindingToken(delta)
+        ApplyCapturedBinding(mouseWheelToken)
     end)
 
     keybindButton:SetScript("OnClick", function(self)

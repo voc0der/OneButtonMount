@@ -147,6 +147,7 @@ local function setup_env(opts)
         function frame:ClearAllPoints() self.point = nil end
         function frame:SetMovable() end
         function frame:EnableMouse() end
+        function frame:EnableMouseWheel(value) self.mouse_wheel_enabled = value end
         function frame:EnableKeyboard() end
         function frame:RegisterForDrag() end
         function frame:RegisterForClicks(...) self.clicks = { ... } end
@@ -1085,6 +1086,61 @@ run_test("shift plus button5 keybind is captured via mouse down fallback", funct
     local last_binding = state.binding_clicks[#state.binding_clicks]
     assert_true(last_binding ~= nil, "no binding call recorded")
     assert_equal(last_binding.key, "SHIFT-BUTTON5", "shift+button5 should be stored as SHIFT-BUTTON5 from mouse down")
+end)
+
+run_test("shift plus mouse wheel up keybind is captured as SHIFT-MOUSEWHEELUP", function()
+    local state = setup_env({
+        mounts = {
+            { spellID = 4104, name = "Test Mount", mountType = 0x01 },
+        },
+        db = {},
+    })
+
+    SlashCmdList["ONEBUTTONMOUNT"]("")
+
+    local key_capture_frame
+    for _, frame in ipairs(state.frames) do
+        if frame.scripts["OnMouseWheel"] and frame.scripts["OnKeyDown"] then
+            key_capture_frame = frame
+            break
+        end
+    end
+    assert_true(key_capture_frame ~= nil, "key capture frame with mouse wheel handler not found")
+    assert_equal(key_capture_frame.mouse_wheel_enabled, true, "key capture frame should enable mouse wheel input")
+
+    state.shift_down = true
+    key_capture_frame.scripts["OnMouseWheel"](key_capture_frame, 1)
+
+    local last_binding = state.binding_clicks[#state.binding_clicks]
+    assert_true(last_binding ~= nil, "no binding call recorded")
+    assert_equal(last_binding.key, "SHIFT-MOUSEWHEELUP", "shift+wheel up should be stored as SHIFT-MOUSEWHEELUP")
+end)
+
+run_test("shift plus mouse wheel down keybind is captured as SHIFT-MOUSEWHEELDOWN", function()
+    local state = setup_env({
+        mounts = {
+            { spellID = 4105, name = "Test Mount", mountType = 0x01 },
+        },
+        db = {},
+    })
+
+    SlashCmdList["ONEBUTTONMOUNT"]("")
+
+    local key_capture_frame
+    for _, frame in ipairs(state.frames) do
+        if frame.scripts["OnMouseWheel"] and frame.scripts["OnKeyDown"] then
+            key_capture_frame = frame
+            break
+        end
+    end
+    assert_true(key_capture_frame ~= nil, "key capture frame with mouse wheel handler not found")
+
+    state.shift_down = true
+    key_capture_frame.scripts["OnMouseWheel"](key_capture_frame, -1)
+
+    local last_binding = state.binding_clicks[#state.binding_clicks]
+    assert_true(last_binding ~= nil, "no binding call recorded")
+    assert_equal(last_binding.key, "SHIFT-MOUSEWHEELDOWN", "shift+wheel down should be stored as SHIFT-MOUSEWHEELDOWN")
 end)
 
 run_test("mount journal fallback populates mounts and can summon", function()
