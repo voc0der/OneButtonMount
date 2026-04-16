@@ -1,5 +1,11 @@
 ## [Unreleased]
 
+## [1.0.24] - 2026-04-16
+
+### Added
+- Added opt-in "Crusader Aura on Mount" checkbox to the config UI, visible only for Paladins who know Crusader Aura (spell 32223); unchecked by default
+- When enabled, Crusader Aura is applied before the mount via the secure keybind path and via the minimap button, and the previously active paladin aura is restored automatically after dismounting through any path including accidental dismounts detected via `UNIT_AURA`
+
 ## [1.0.23] - 2026-04-11
 
 ### Fixed

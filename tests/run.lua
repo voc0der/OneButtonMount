@@ -65,6 +65,8 @@ local function setup_env(opts)
         is_spell_known_available = opts.is_spell_known_available ~= false,
         locale = opts.locale or "enUS",
         run_macro_text_available = opts.run_macro_text_available or false,
+        player_class = opts.player_class or nil,
+        shapeshift_forms = opts.shapeshift_forms or {},
     }
 
     _G.unpack = table.unpack
@@ -361,6 +363,20 @@ local function setup_env(opts)
     _G.GetLocale = function()
         return state.locale
     end
+    _G.UnitClass = function(unit)
+        if unit == "player" and state.player_class then
+            return state.player_class.local_name or state.player_class[1], state.player_class.file or state.player_class[2]
+        end
+        return nil, nil
+    end
+    _G.GetNumShapeshiftForms = function()
+        return #state.shapeshift_forms
+    end
+    _G.GetShapeshiftFormInfo = function(index)
+        local form = state.shapeshift_forms[index]
+        if not form then return nil end
+        return form.texture, form.isActive or false, form.isCastable ~= false, form.spellID
+    end
     _G.GetItemSpell = function(item_id)
         local spell = state.item_spells[item_id]
         if spell then
@@ -581,27 +597,34 @@ local function trigger_secure_mount(state, button)
     state.last_cast_spell_id = nil
     state.last_cast_spell_name = nil
     state.last_used_item_id = nil
+    state.macro_cast_lines = {}
 
     binding_button.scripts["PreClick"](binding_button, button or "LeftButton")
 
     local macro_text = binding_button:GetAttribute("macrotext")
     state.last_binding_macrotext = macro_text
 
-    if macro_text == "/dismount" then
-        state.dismounted = true
+    if not macro_text or macro_text == "" then
         return macro_text
     end
 
-    local item_id = string.match(macro_text or "", "^/use item:(%d+)$")
-    if item_id then
-        state.last_used_item_id = tonumber(item_id)
-        return macro_text
-    end
-
-    local spell_name = string.match(macro_text or "", "^/cast (.+)$")
-    if spell_name then
-        state.last_cast_spell_name = spell_name
-        state.last_cast_spell_id = resolve_spell_id_by_name(state, spell_name)
+    -- Parse each line of potentially multi-line macrotext
+    for line in (macro_text .. "\n"):gmatch("([^\n]*)\n") do
+        if line == "/dismount" then
+            state.dismounted = true
+        else
+            local item_id = string.match(line, "^/use item:(%d+)$")
+            if item_id then
+                state.last_used_item_id = tonumber(item_id)
+            else
+                local spell_name = string.match(line, "^/cast !?(.+)$")
+                if spell_name then
+                    state.macro_cast_lines[#state.macro_cast_lines + 1] = spell_name
+                    state.last_cast_spell_name = spell_name
+                    state.last_cast_spell_id = resolve_spell_id_by_name(state, spell_name)
+                end
+            end
+        end
     end
 
     return macro_text
@@ -1748,6 +1771,242 @@ run_test("config window position is stored per character", function()
     assert_true(type(OneButtonMountCharDB.configPosition) == "table", "config position should be stored per character")
     assert_equal(OneButtonMountCharDB.configPosition.point, "CENTER", "config position point should be saved")
     assert_equal(OneButtonMountDB.configPosition, nil, "legacy account-wide config position should remain unused")
+end)
+
+run_test("crusader aura is prepended to mount macrotext for paladins with the feature enabled", function()
+    local state = setup_env({
+        mounts = {
+            { spellID = 5201, name = "Warhorse", mountType = 0x01 },
+        },
+        known_spells = {
+            [32223] = true,
+        },
+        spell_infos = {
+            [5201] = { name = "Warhorse", icon = "icon" },
+            [32223] = { name = "Crusader Aura", icon = "crusader" },
+        },
+        player_class = { "Paladin", "PALADIN" },
+        shapeshift_forms = {
+            { spellID = 465, isActive = true },
+        },
+        char_db = {
+            groundMounts = { 5201 },
+            flyingMounts = {},
+            crusaderAura = true,
+        },
+        c_map_enabled = false,
+    })
+
+    trigger_secure_mount(state)
+
+    assert_true(state.last_binding_macrotext ~= nil, "macrotext should be set")
+    assert_true(string.find(state.last_binding_macrotext, "!Crusader Aura", 1, true) ~= nil, "macrotext should contain !Crusader Aura to prevent toggle-off")
+    assert_true(string.find(state.last_binding_macrotext, "Warhorse", 1, true) ~= nil, "macrotext should contain the mount")
+    assert_equal(state.macro_cast_lines[1], "Crusader Aura", "first cast should be Crusader Aura")
+    assert_equal(state.macro_cast_lines[2], "Warhorse", "second cast line should be the mount spell")
+end)
+
+run_test("crusader aura is not applied when feature is disabled", function()
+    local state = setup_env({
+        mounts = {
+            { spellID = 5202, name = "Warhorse", mountType = 0x01 },
+        },
+        known_spells = {
+            [32223] = true,
+        },
+        spell_infos = {
+            [5202] = { name = "Warhorse", icon = "icon" },
+            [32223] = { name = "Crusader Aura", icon = "crusader" },
+        },
+        player_class = { "Paladin", "PALADIN" },
+        char_db = {
+            groundMounts = { 5202 },
+            flyingMounts = {},
+            crusaderAura = false,
+        },
+        c_map_enabled = false,
+    })
+
+    trigger_secure_mount(state)
+
+    assert_true(state.last_binding_macrotext ~= nil, "macrotext should be set")
+    assert_true(string.find(state.last_binding_macrotext, "Crusader Aura", 1, true) == nil, "macrotext should not contain Crusader Aura when disabled")
+    assert_equal(#state.macro_cast_lines, 1, "only one cast line when disabled")
+    assert_equal(state.macro_cast_lines[1], "Warhorse", "cast line should be the mount only")
+end)
+
+run_test("crusader aura is not applied for non-paladin classes", function()
+    local state = setup_env({
+        mounts = {
+            { spellID = 5203, name = "Brown Horse", mountType = 0x01 },
+        },
+        known_spells = {},
+        spell_infos = {
+            [5203] = { name = "Brown Horse", icon = "icon" },
+        },
+        player_class = { "Warrior", "WARRIOR" },
+        char_db = {
+            groundMounts = { 5203 },
+            flyingMounts = {},
+            crusaderAura = true,
+        },
+        c_map_enabled = false,
+    })
+
+    trigger_secure_mount(state)
+
+    assert_true(state.last_binding_macrotext ~= nil, "macrotext should be set")
+    assert_true(string.find(state.last_binding_macrotext, "Crusader Aura", 1, true) == nil, "macrotext should not contain Crusader Aura for non-paladins")
+end)
+
+run_test("saved aura is restored in macrotext on dismount", function()
+    local state = setup_env({
+        mounts = {
+            { spellID = 5204, name = "Warhorse", mountType = 0x01 },
+        },
+        known_spells = {
+            [32223] = true,
+        },
+        spell_infos = {
+            [5204] = { name = "Warhorse", icon = "icon" },
+            [32223] = { name = "Crusader Aura", icon = "crusader" },
+            [465] = { name = "Devotion Aura", icon = "devotion" },
+        },
+        player_class = { "Paladin", "PALADIN" },
+        shapeshift_forms = {
+            { spellID = 465, isActive = true },
+        },
+        char_db = {
+            groundMounts = { 5204 },
+            flyingMounts = {},
+            crusaderAura = true,
+        },
+        c_map_enabled = false,
+    })
+
+    -- First press: mount (saves Devotion Aura, prepends Crusader Aura)
+    trigger_secure_mount(state)
+    assert_true(string.find(state.last_binding_macrotext, "!Crusader Aura", 1, true) ~= nil, "first press macrotext should include !Crusader Aura")
+
+    -- Simulate being mounted now
+    state.mounted = true
+
+    -- Second press: dismount (should restore Devotion Aura)
+    trigger_secure_mount(state)
+    assert_true(state.dismounted, "dismount should be in macrotext")
+    assert_true(string.find(state.last_binding_macrotext, "Devotion Aura", 1, true) ~= nil, "dismount macrotext should include the saved aura")
+end)
+
+run_test("no aura restoration when crusader aura feature is disabled on dismount", function()
+    local state = setup_env({
+        mounts = {
+            { spellID = 5205, name = "Warhorse", mountType = 0x01 },
+        },
+        player_class = { "Paladin", "PALADIN" },
+        char_db = {
+            groundMounts = { 5205 },
+            flyingMounts = {},
+            crusaderAura = false,
+        },
+        c_map_enabled = false,
+        mounted = true,
+    })
+
+    trigger_secure_mount(state)
+
+    assert_equal(state.last_binding_macrotext, "/dismount", "disabled feature should produce plain dismount")
+end)
+
+run_test("unit aura event restores saved aura when dismounted outside combat", function()
+    local state = setup_env({
+        mounts = {
+            { spellID = 5206, name = "Warhorse", mountType = 0x01 },
+        },
+        known_spells = {
+            [32223] = true,
+        },
+        spell_infos = {
+            [5206] = { name = "Warhorse", icon = "icon" },
+            [32223] = { name = "Crusader Aura", icon = "crusader" },
+            [465] = { name = "Devotion Aura", icon = "devotion" },
+        },
+        player_class = { "Paladin", "PALADIN" },
+        shapeshift_forms = {
+            { spellID = 465, isActive = true },
+        },
+        char_db = {
+            groundMounts = { 5206 },
+            flyingMounts = {},
+            crusaderAura = true,
+        },
+        c_map_enabled = false,
+    })
+
+    -- Mount via keybind so savedAura is set
+    trigger_secure_mount(state)
+
+    -- Simulate mount happening (player is now mounted)
+    state.mounted = true
+
+    -- Simulate wasMountedState update by firing UNIT_AURA while mounted
+    local event_frame
+    for _, frame in ipairs(state.frames) do
+        if frame.events["UNIT_AURA"] and frame.scripts["OnEvent"] then
+            event_frame = frame
+            break
+        end
+    end
+    assert_true(event_frame ~= nil, "event frame should be registered for UNIT_AURA")
+    event_frame.scripts["OnEvent"](event_frame, "UNIT_AURA", "player")
+
+    -- Simulate dismount (player is no longer mounted)
+    state.mounted = false
+    state.last_cast_spell_name = nil
+
+    -- Fire UNIT_AURA again to detect the dismount
+    event_frame.scripts["OnEvent"](event_frame, "UNIT_AURA", "player")
+
+    assert_equal(state.last_cast_spell_name, "Devotion Aura", "UNIT_AURA handler should restore the saved aura on dismount")
+end)
+
+run_test("minimap dismount restores saved aura", function()
+    local state = setup_env({
+        mounts = {
+            { spellID = 5207, name = "Warhorse", mountType = 0x01 },
+        },
+        known_spells = {
+            [32223] = true,
+        },
+        spell_infos = {
+            [5207] = { name = "Warhorse", icon = "icon" },
+            [32223] = { name = "Crusader Aura", icon = "crusader" },
+            [465] = { name = "Devotion Aura", icon = "devotion" },
+        },
+        player_class = { "Paladin", "PALADIN" },
+        shapeshift_forms = {
+            { spellID = 465, isActive = true },
+        },
+        char_db = {
+            groundMounts = { 5207 },
+            flyingMounts = {},
+            crusaderAura = true,
+        },
+        c_map_enabled = false,
+    })
+
+    -- Mount via keybind to save the aura
+    trigger_secure_mount(state)
+
+    -- Now simulate being mounted and dismounting via minimap
+    state.mounted = true
+    state.last_cast_spell_name = nil
+
+    local minimap_button = _G.OneButtonMountMinimapButton
+    assert_true(minimap_button ~= nil, "minimap button should exist")
+    minimap_button.scripts["OnClick"](minimap_button, "RightButton")
+
+    assert_true(state.dismounted, "minimap right-click should dismount")
+    assert_equal(state.last_cast_spell_name, "Devotion Aura", "minimap dismount should restore the saved aura")
 end)
 
 print(string.format("Ran %d tests, %d failures", total, failures))

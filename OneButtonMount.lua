@@ -61,6 +61,8 @@ local SPELL_MOUNT_ALIASES = {
 -- Flying mounts have bit 0x02 set (mountType values like 0x0f, 0x1f include flying)
 local MOUNT_TYPE_FLAG_FLYING = 0x02
 
+local CRUSADER_AURA_SPELL_ID = 32223
+
 -- Temple of Ahn'Qiraj (AQ40)
 local AQ40_INSTANCE_ID = 531
 local AQ40_ZONE_NAMES = {
@@ -80,6 +82,8 @@ local AQ40_CRYSTAL_ITEM_IDS = {
 local configFrame = nil
 local minimapButton = nil
 local allMounts = {}        -- { spellID, name, icon, isFlying, canDetermineFlying, index, journalID }
+local savedAuraBeforeMount = nil
+local wasMountedState = false
 
 -- ============================================================================
 -- Utility
@@ -1203,6 +1207,58 @@ end
 -- Mount Summoning
 -- ============================================================================
 
+local function GetCrusaderAuraFeatureEnabled()
+    return GetCharacterDB().crusaderAura == true
+end
+
+local function ShouldUseCrusaderAura()
+    if not GetCrusaderAuraFeatureEnabled() then return false end
+    if not UnitClass then return false end
+    local _, class = UnitClass("player")
+    if class ~= "PALADIN" then return false end
+    return IsPlayerSpellKnown(CRUSADER_AURA_SPELL_ID, "Crusader Aura")
+end
+
+local function GetActiveNonCrusaderAuraName()
+    if not (GetNumShapeshiftForms and GetShapeshiftFormInfo) then return nil end
+    local numForms = SafeToNumber(GetNumShapeshiftForms()) or 0
+    for i = 1, numForms do
+        local _, isActive, _, spellID = GetShapeshiftFormInfo(i)
+        if isActive then
+            local id = SafeToNumber(spellID)
+            if id and id ~= CRUSADER_AURA_SPELL_ID then
+                return GetSpellInfo and GetSpellInfo(id) or nil
+            end
+            return nil
+        end
+    end
+    return nil
+end
+
+local function IsCrusaderAuraActive()
+    if not (GetNumShapeshiftForms and GetShapeshiftFormInfo) then return false end
+    local numForms = SafeToNumber(GetNumShapeshiftForms()) or 0
+    for i = 1, numForms do
+        local _, isActive, _, spellID = GetShapeshiftFormInfo(i)
+        if isActive and SafeToNumber(spellID) == CRUSADER_AURA_SPELL_ID then
+            return true
+        end
+    end
+    return false
+end
+
+local function GetCrusaderAuraName()
+    return (GetSpellInfo and GetSpellInfo(CRUSADER_AURA_SPELL_ID)) or "Crusader Aura"
+end
+
+local function SaveCurrentAura()
+    savedAuraBeforeMount = GetActiveNonCrusaderAuraName()
+end
+
+local function ClearSavedAura()
+    savedAuraBeforeMount = nil
+end
+
 local function BuildMountMacroText(spellID, mount)
     if mount and mount.itemID then
         return "/use item:" .. mount.itemID
@@ -1223,7 +1279,15 @@ local function SummonRandomMount()
     end
 
     if IsMounted() then
+        local auraToRestore = nil
+        if ShouldUseCrusaderAura() and savedAuraBeforeMount then
+            auraToRestore = savedAuraBeforeMount
+        end
+        ClearSavedAura()
         Dismount()
+        if auraToRestore and CastSpellByName then
+            CastSpellByName(auraToRestore)
+        end
         return
     end
 
@@ -1240,6 +1304,17 @@ local function SummonRandomMount()
     if not pool or #pool == 0 then
         Feedback(poolError or "No mounts in your rotation! Open the config with /onebuttonmount")
         return
+    end
+
+    if ShouldUseCrusaderAura() and not IsCrusaderAuraActive() then
+        if not savedAuraBeforeMount then
+            SaveCurrentAura()
+        end
+        if CastSpellByID then
+            CastSpellByID(CRUSADER_AURA_SPELL_ID)
+        elseif CastSpellByName then
+            CastSpellByName(GetCrusaderAuraName())
+        end
     end
 
     -- Pick a random mount from the pool
@@ -1340,7 +1415,16 @@ bindingFrame:SetScript("PreClick", function(self, button)
     SanitizeSavedMountPools()
 
     if IsMounted() then
-        self:SetAttribute("macrotext", "/dismount")
+        local auraToRestore = nil
+        if ShouldUseCrusaderAura() and savedAuraBeforeMount then
+            auraToRestore = savedAuraBeforeMount
+        end
+        ClearSavedAura()
+        if auraToRestore then
+            self:SetAttribute("macrotext", "/dismount\n/cast " .. auraToRestore)
+        else
+            self:SetAttribute("macrotext", "/dismount")
+        end
         return
     end
 
@@ -1360,12 +1444,20 @@ bindingFrame:SetScript("PreClick", function(self, button)
 
     local spellID = pool[math.random(#pool)]
     local mount = GetMountBySpellID(spellID)
-    local macroText = BuildMountMacroText(spellID, mount)
-    if macroText then
-        self:SetAttribute("macrotext", macroText)
-    else
-        -- Fallback: clear macrotext to avoid firing a stale spell
+    local mountLine = BuildMountMacroText(spellID, mount)
+    if not mountLine then
         self:SetAttribute("macrotext", "")
+        return
+    end
+
+    if ShouldUseCrusaderAura() then
+        if not savedAuraBeforeMount then
+            SaveCurrentAura()
+        end
+        local crusaderName = GetCrusaderAuraName()
+        self:SetAttribute("macrotext", "/cast !" .. crusaderName .. "\n" .. mountLine)
+    else
+        self:SetAttribute("macrotext", mountLine)
     end
 end)
 
@@ -1803,6 +1895,29 @@ function OneButtonMount:CreateConfigUI()
     yOffset = yOffset - 35
 
     -- ========================================================================
+    -- Crusader Aura (Paladin only)
+    -- ========================================================================
+    if UnitClass and select(2, UnitClass("player")) == "PALADIN" and IsPlayerSpellKnown(CRUSADER_AURA_SPELL_ID, "Crusader Aura") then
+        local crusaderAuraCheck = CreateFrame("CheckButton", nil, configFrame, "UICheckButtonTemplate")
+        crusaderAuraCheck:SetPoint("TOPLEFT", configFrame, "TOPLEFT", 12, yOffset)
+        crusaderAuraCheck:SetChecked(GetCrusaderAuraFeatureEnabled())
+        configFrame.crusaderAuraCheckbox = crusaderAuraCheck
+        ApplyElvUISkin(crusaderAuraCheck, "checkbox")
+
+        local crusaderAuraLabel = configFrame:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+        crusaderAuraLabel:SetPoint("LEFT", crusaderAuraCheck, "RIGHT", 2, 0)
+        crusaderAuraLabel:SetText("Crusader Aura on Mount (restores previous aura on dismount)")
+
+        crusaderAuraCheck:SetScript("OnClick", function(self)
+            characterDB.crusaderAura = self:GetChecked() and true or false
+        end)
+
+        yOffset = yOffset - 35
+    end
+
+    configFrame.poolsStartOffset = yOffset
+
+    -- ========================================================================
     -- Ground Mount Pool
     -- ========================================================================
     local groundContainer, groundLabel = CreatePoolSection(configFrame, "Ground Mount Rotation", POOL_GROUND, yOffset)
@@ -1862,6 +1977,9 @@ function OneButtonMount:RefreshConfigUI()
     end
     if configFrame.textualFeedbackCheckbox then
         configFrame.textualFeedbackCheckbox:SetChecked(ShowTextualFeedback())
+    end
+    if configFrame.crusaderAuraCheckbox then
+        configFrame.crusaderAuraCheckbox:SetChecked(GetCrusaderAuraFeatureEnabled())
     end
 
     -- Refresh ground pool
@@ -1930,7 +2048,7 @@ function OneButtonMount:RefreshConfigUI()
     fc:SetHeight(math.max(44, rows * rowHeight + 8))
 
     -- Reposition sections based on dynamic heights
-    local yOffset = -35 - 35 - 35 -- keybind + settings row
+    local yOffset = configFrame.poolsStartOffset or (-35 - 35 - 35)
 
     configFrame.groundLabel:ClearAllPoints()
     configFrame.groundLabel:SetPoint("TOPLEFT", configFrame, "TOPLEFT", 15, yOffset)
@@ -2120,12 +2238,14 @@ local eventFrame = CreateFrame("Frame")
 eventFrame:RegisterEvent("ADDON_LOADED")
 eventFrame:RegisterEvent("PLAYER_ENTERING_WORLD")
 eventFrame:RegisterEvent("COMPANION_UPDATE")
+eventFrame:RegisterEvent("UNIT_AURA")
 
 eventFrame:SetScript("OnEvent", function(self, event, arg1, ...)
     if event == "ADDON_LOADED" and arg1 == addonName then
         OneButtonMount:InitDB()
         ScanMounts()
         SanitizeSavedMountPools()
+        wasMountedState = IsMounted and IsMounted() or false
 
         -- Create minimap button
         if GetMinimapSettings().show then
@@ -2140,6 +2260,7 @@ eventFrame:SetScript("OnEvent", function(self, event, arg1, ...)
         RestoreKeybind()
         ScanMounts()
         SanitizeSavedMountPools()
+        wasMountedState = IsMounted and IsMounted() or false
 
     elseif event == "COMPANION_UPDATE" then
         ScanMounts()
@@ -2147,5 +2268,20 @@ eventFrame:SetScript("OnEvent", function(self, event, arg1, ...)
         if configFrame and configFrame:IsShown() then
             OneButtonMount:RefreshConfigUI()
         end
+
+    elseif event == "UNIT_AURA" and arg1 == "player" then
+        local nowMounted = IsMounted and IsMounted() or false
+        if wasMountedState and not nowMounted then
+            if savedAuraBeforeMount and ShouldUseCrusaderAura() and not InCombatLockdown() then
+                local auraName = savedAuraBeforeMount
+                ClearSavedAura()
+                if CastSpellByName then
+                    CastSpellByName(auraName)
+                end
+            else
+                ClearSavedAura()
+            end
+        end
+        wasMountedState = nowMounted
     end
 end)
