@@ -1773,16 +1773,17 @@ run_test("config window position is stored per character", function()
     assert_equal(OneButtonMountDB.configPosition, nil, "legacy account-wide config position should remain unused")
 end)
 
-run_test("crusader aura is cast alone on first press when not active; mount fires on second press", function()
+run_test("crusader aura is cast alone on first press for class spell mounts; mount fires on second press", function()
+    -- Class spell mounts (Paladin Warhorse etc.) share the combat GCD with aura spells.
+    -- They are added via SPELL_MOUNT_SPELLS with no companion index, so isSpellOnlyMount = true.
     local state = setup_env({
-        mounts = {
-            { spellID = 5201, name = "Warhorse", mountType = 0x01 },
-        },
+        mounts = {},  -- no companion mounts; class mount added via known_spells path
         known_spells = {
-            [32223] = true,
+            [13819] = true,  -- Summon Warhorse
+            [32223] = true,  -- Crusader Aura
         },
         spell_infos = {
-            [5201] = { name = "Warhorse", icon = "icon" },
+            [13819] = { name = "Summon Warhorse", icon = "icon" },
             [32223] = { name = "Crusader Aura", icon = "crusader" },
         },
         player_class = { "Paladin", "PALADIN" },
@@ -1790,7 +1791,7 @@ run_test("crusader aura is cast alone on first press when not active; mount fire
             { spellID = 465, isActive = true },
         },
         char_db = {
-            groundMounts = { 5201 },
+            groundMounts = { 13819 },
             flyingMounts = {},
             crusaderAura = true,
         },
@@ -1808,7 +1809,43 @@ run_test("crusader aura is cast alone on first press when not active; mount fire
 
     -- Second press: CA active → mount fires without GCD issue
     trigger_secure_mount(state)
-    assert_equal(state.last_cast_spell_id, 5201, "second press should cast the mount")
+    assert_equal(state.last_cast_spell_id, 13819, "second press should cast the mount")
+end)
+
+run_test("companion mount with crusader aura active mounts in a single press", function()
+    -- Companion mounts bypass the combat GCD, so CA + mount can fire in one macro.
+    local state = setup_env({
+        mounts = {
+            { spellID = 5201, name = "Brown Horse", mountType = 0x01 },
+        },
+        known_spells = {
+            [32223] = true,
+        },
+        spell_infos = {
+            [5201] = { name = "Brown Horse", icon = "icon" },
+            [32223] = { name = "Crusader Aura", icon = "crusader" },
+        },
+        player_class = { "Paladin", "PALADIN" },
+        shapeshift_forms = {
+            { spellID = 465, isActive = true },
+        },
+        char_db = {
+            groundMounts = { 5201 },
+            flyingMounts = {},
+            crusaderAura = true,
+        },
+        c_map_enabled = false,
+    })
+
+    -- Single press: companion mount → CA + mount in one macro line
+    trigger_secure_mount(state)
+    assert_true(string.find(state.last_binding_macrotext, "Crusader Aura", 1, true) ~= nil,
+        "macrotext should include Crusader Aura")
+    assert_true(string.find(state.last_binding_macrotext, "Brown Horse", 1, true) ~= nil,
+        "macrotext should include the mount in the same press")
+    assert_equal(#state.macro_cast_lines, 2, "both CA and mount should appear as cast lines")
+    assert_equal(state.macro_cast_lines[1], "Crusader Aura", "first cast line should be Crusader Aura")
+    assert_equal(state.macro_cast_lines[2], "Brown Horse", "second cast line should be the mount")
 end)
 
 run_test("crusader aura is not applied when feature is disabled", function()
@@ -1866,14 +1903,13 @@ end)
 
 run_test("saved aura is restored in macrotext on dismount", function()
     local state = setup_env({
-        mounts = {
-            { spellID = 5204, name = "Warhorse", mountType = 0x01 },
-        },
+        mounts = {},  -- no companion mounts; class mount added via known_spells path
         known_spells = {
-            [32223] = true,
+            [13819] = true,  -- Summon Warhorse
+            [32223] = true,  -- Crusader Aura
         },
         spell_infos = {
-            [5204] = { name = "Warhorse", icon = "icon" },
+            [13819] = { name = "Summon Warhorse", icon = "icon" },
             [32223] = { name = "Crusader Aura", icon = "crusader" },
             [465] = { name = "Devotion Aura", icon = "devotion" },
         },
@@ -1882,7 +1918,7 @@ run_test("saved aura is restored in macrotext on dismount", function()
             { spellID = 465, isActive = true },
         },
         char_db = {
-            groundMounts = { 5204 },
+            groundMounts = { 13819 },
             flyingMounts = {},
             crusaderAura = true,
         },
@@ -1898,7 +1934,7 @@ run_test("saved aura is restored in macrotext on dismount", function()
 
     -- Press 2: CA active → mount
     trigger_secure_mount(state)
-    assert_equal(state.last_cast_spell_name, "Warhorse", "second press should cast the mount")
+    assert_equal(state.last_cast_spell_name, "Summon Warhorse", "second press should cast the mount")
 
     -- Simulate being mounted
     state.mounted = true
@@ -1931,14 +1967,13 @@ end)
 
 run_test("unit aura event restores saved aura when dismounted outside combat", function()
     local state = setup_env({
-        mounts = {
-            { spellID = 5206, name = "Warhorse", mountType = 0x01 },
-        },
+        mounts = {},  -- no companion mounts; class mount added via known_spells path
         known_spells = {
-            [32223] = true,
+            [13819] = true,  -- Summon Warhorse
+            [32223] = true,  -- Crusader Aura
         },
         spell_infos = {
-            [5206] = { name = "Warhorse", icon = "icon" },
+            [13819] = { name = "Summon Warhorse", icon = "icon" },
             [32223] = { name = "Crusader Aura", icon = "crusader" },
             [465] = { name = "Devotion Aura", icon = "devotion" },
         },
@@ -1947,7 +1982,7 @@ run_test("unit aura event restores saved aura when dismounted outside combat", f
             { spellID = 465, isActive = true },
         },
         char_db = {
-            groundMounts = { 5206 },
+            groundMounts = { 13819 },
             flyingMounts = {},
             crusaderAura = true,
         },
@@ -1983,14 +2018,13 @@ end)
 
 run_test("minimap dismount restores saved aura", function()
     local state = setup_env({
-        mounts = {
-            { spellID = 5207, name = "Warhorse", mountType = 0x01 },
-        },
+        mounts = {},  -- no companion mounts; class mount added via known_spells path
         known_spells = {
-            [32223] = true,
+            [13819] = true,  -- Summon Warhorse
+            [32223] = true,  -- Crusader Aura
         },
         spell_infos = {
-            [5207] = { name = "Warhorse", icon = "icon" },
+            [13819] = { name = "Summon Warhorse", icon = "icon" },
             [32223] = { name = "Crusader Aura", icon = "crusader" },
             [465] = { name = "Devotion Aura", icon = "devotion" },
         },
@@ -1999,7 +2033,7 @@ run_test("minimap dismount restores saved aura", function()
             { spellID = 465, isActive = true },
         },
         char_db = {
-            groundMounts = { 5207 },
+            groundMounts = { 13819 },
             flyingMounts = {},
             crusaderAura = true,
         },
@@ -2023,14 +2057,13 @@ end)
 
 run_test("cancelling mount cast restores previous aura via UNIT_SPELLCAST_INTERRUPTED", function()
     local state = setup_env({
-        mounts = {
-            { spellID = 5208, name = "Warhorse", mountType = 0x01 },
-        },
+        mounts = {},  -- no companion mounts; class mount added via known_spells path
         known_spells = {
-            [32223] = true,
+            [13819] = true,  -- Summon Warhorse
+            [32223] = true,  -- Crusader Aura
         },
         spell_infos = {
-            [5208] = { name = "Warhorse", icon = "icon" },
+            [13819] = { name = "Summon Warhorse", icon = "icon" },
             [32223] = { name = "Crusader Aura", icon = "crusader" },
             [465] = { name = "Devotion Aura", icon = "devotion" },
         },
@@ -2039,7 +2072,7 @@ run_test("cancelling mount cast restores previous aura via UNIT_SPELLCAST_INTERR
             { spellID = 465, isActive = true },
         },
         char_db = {
-            groundMounts = { 5208 },
+            groundMounts = { 13819 },
             flyingMounts = {},
             crusaderAura = true,
         },

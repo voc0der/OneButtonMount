@@ -1307,30 +1307,42 @@ local function SummonRandomMount()
         return
     end
 
+    -- Pick a random mount from the pool
+    local spellID = pool[math.random(#pool)]
+    local mount = GetMountBySpellID(spellID)
+    -- Spell-only mounts (Paladin/Warlock class mounts) are on the combat GCD;
+    -- companion, journal, and item mounts bypass the GCD and can be called immediately.
+    local isSpellOnlyMount = not mount or (not mount.index and not mount.journalID and not mount.itemID)
+
     if ShouldUseCrusaderAura() then
         if not IsCrusaderAuraActive() then
-            -- CA not yet active: switch aura now, mount on the next press
             if not savedAuraBeforeMount then
                 SaveCurrentAura()
             end
-            if CastSpellByID then
-                CastSpellByID(CRUSADER_AURA_SPELL_ID)
-            elseif CastSpellByName then
-                CastSpellByName(GetCrusaderAuraName())
+            if isSpellOnlyMount then
+                -- Class spell mount shares the GCD with CA: apply CA now, mount on the next press
+                if CastSpellByID then
+                    CastSpellByID(CRUSADER_AURA_SPELL_ID)
+                elseif CastSpellByName then
+                    CastSpellByName(GetCrusaderAuraName())
+                end
+                return
+            else
+                -- Companion/journal/item mount bypasses the GCD: apply CA then fall through to mount
+                if CastSpellByID then
+                    CastSpellByID(CRUSADER_AURA_SPELL_ID)
+                elseif CastSpellByName then
+                    CastSpellByName(GetCrusaderAuraName())
+                end
             end
-            return
         end
-        -- CA already active: save the aura we're about to leave behind (if not already saved)
+        -- CA already active (or we just activated it for non-spell mounts): record aura for restore
         if not savedAuraBeforeMount then
             SaveCurrentAura()
         end
     end
 
     mountingInProgress = true
-
-    -- Pick a random mount from the pool
-    local spellID = pool[math.random(#pool)]
-    local mount = GetMountBySpellID(spellID)
     if mount then
         if mount.journalID and C_MountJournal and C_MountJournal.SummonByID then
             C_MountJournal.SummonByID(mount.journalID)
@@ -1461,16 +1473,27 @@ bindingFrame:SetScript("PreClick", function(self, button)
         return
     end
 
+    -- Spell-only mounts (Paladin/Warlock class mounts) are on the combat GCD;
+    -- companion, journal, and item mounts bypass the GCD and can be chained in one macro.
+    local isSpellOnlyMount = not mount or (not mount.index and not mount.journalID and not mount.itemID)
+
     if ShouldUseCrusaderAura() then
         if not IsCrusaderAuraActive() then
-            -- CA not yet active: switch aura now, mount on the next press
             if not savedAuraBeforeMount then
                 SaveCurrentAura()
             end
-            self:SetAttribute("macrotext", "/cast " .. GetCrusaderAuraName())
-            return
+            if isSpellOnlyMount then
+                -- Class spell mount shares the GCD with CA: apply CA now, mount on the next press
+                self:SetAttribute("macrotext", "/cast " .. GetCrusaderAuraName())
+                return
+            else
+                -- Companion/journal/item mount bypasses the GCD: CA + mount in one macro
+                mountingInProgress = true
+                self:SetAttribute("macrotext", "/cast " .. GetCrusaderAuraName() .. "\n" .. mountLine)
+                return
+            end
         end
-        -- CA already active: save the aura we're about to leave behind (if not already saved)
+        -- CA already active (or not needed this press): record aura for restore
         if not savedAuraBeforeMount then
             SaveCurrentAura()
         end
