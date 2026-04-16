@@ -65,6 +65,8 @@ local function setup_env(opts)
         is_spell_known_available = opts.is_spell_known_available ~= false,
         locale = opts.locale or "enUS",
         run_macro_text_available = opts.run_macro_text_available or false,
+        player_class = opts.player_class or nil,
+        shapeshift_forms = opts.shapeshift_forms or {},
     }
 
     _G.unpack = table.unpack
@@ -361,6 +363,20 @@ local function setup_env(opts)
     _G.GetLocale = function()
         return state.locale
     end
+    _G.UnitClass = function(unit)
+        if unit == "player" and state.player_class then
+            return state.player_class.local_name or state.player_class[1], state.player_class.file or state.player_class[2]
+        end
+        return nil, nil
+    end
+    _G.GetNumShapeshiftForms = function()
+        return #state.shapeshift_forms
+    end
+    _G.GetShapeshiftFormInfo = function(index)
+        local form = state.shapeshift_forms[index]
+        if not form then return nil end
+        return form.texture, form.isActive or false, form.isCastable ~= false, form.spellID
+    end
     _G.GetItemSpell = function(item_id)
         local spell = state.item_spells[item_id]
         if spell then
@@ -581,27 +597,34 @@ local function trigger_secure_mount(state, button)
     state.last_cast_spell_id = nil
     state.last_cast_spell_name = nil
     state.last_used_item_id = nil
+    state.macro_cast_lines = {}
 
     binding_button.scripts["PreClick"](binding_button, button or "LeftButton")
 
     local macro_text = binding_button:GetAttribute("macrotext")
     state.last_binding_macrotext = macro_text
 
-    if macro_text == "/dismount" then
-        state.dismounted = true
+    if not macro_text or macro_text == "" then
         return macro_text
     end
 
-    local item_id = string.match(macro_text or "", "^/use item:(%d+)$")
-    if item_id then
-        state.last_used_item_id = tonumber(item_id)
-        return macro_text
-    end
-
-    local spell_name = string.match(macro_text or "", "^/cast (.+)$")
-    if spell_name then
-        state.last_cast_spell_name = spell_name
-        state.last_cast_spell_id = resolve_spell_id_by_name(state, spell_name)
+    -- Parse each line of potentially multi-line macrotext
+    for line in (macro_text .. "\n"):gmatch("([^\n]*)\n") do
+        if line == "/dismount" then
+            state.dismounted = true
+        else
+            local item_id = string.match(line, "^/use item:(%d+)$")
+            if item_id then
+                state.last_used_item_id = tonumber(item_id)
+            else
+                local spell_name = string.match(line, "^/cast !?(.+)$")
+                if spell_name then
+                    state.macro_cast_lines[#state.macro_cast_lines + 1] = spell_name
+                    state.last_cast_spell_name = spell_name
+                    state.last_cast_spell_id = resolve_spell_id_by_name(state, spell_name)
+                end
+            end
+        end
     end
 
     return macro_text
@@ -1748,6 +1771,335 @@ run_test("config window position is stored per character", function()
     assert_true(type(OneButtonMountCharDB.configPosition) == "table", "config position should be stored per character")
     assert_equal(OneButtonMountCharDB.configPosition.point, "CENTER", "config position point should be saved")
     assert_equal(OneButtonMountDB.configPosition, nil, "legacy account-wide config position should remain unused")
+end)
+
+run_test("crusader aura is cast alone on first press for class spell mounts; mount fires on second press", function()
+    -- Class spell mounts (Paladin Warhorse etc.) share the combat GCD with aura spells.
+    -- They are added via SPELL_MOUNT_SPELLS with no companion index, so isSpellOnlyMount = true.
+    local state = setup_env({
+        mounts = {},  -- no companion mounts; class mount added via known_spells path
+        known_spells = {
+            [13819] = true,  -- Summon Warhorse
+            [32223] = true,  -- Crusader Aura
+        },
+        spell_infos = {
+            [13819] = { name = "Summon Warhorse", icon = "icon" },
+            [32223] = { name = "Crusader Aura", icon = "crusader" },
+        },
+        player_class = { "Paladin", "PALADIN" },
+        shapeshift_forms = {
+            { spellID = 465, isActive = true },
+        },
+        char_db = {
+            groundMounts = { 13819 },
+            flyingMounts = {},
+            crusaderAura = true,
+        },
+        c_map_enabled = false,
+    })
+
+    -- First press: CA not active → only switch aura, no mount
+    trigger_secure_mount(state)
+    assert_equal(state.last_binding_macrotext, "/cast Crusader Aura", "first press should only cast Crusader Aura")
+    assert_equal(#state.macro_cast_lines, 1, "first press should have exactly one cast line")
+    assert_equal(state.macro_cast_lines[1], "Crusader Aura", "first press cast should be Crusader Aura")
+
+    -- Simulate CA becoming active
+    state.shapeshift_forms = { { spellID = 32223, isActive = true } }
+
+    -- Second press: CA active → mount fires without GCD issue
+    trigger_secure_mount(state)
+    assert_equal(state.last_cast_spell_id, 13819, "second press should cast the mount")
+end)
+
+run_test("companion mount with crusader aura active mounts in a single press", function()
+    -- Companion mounts bypass the combat GCD, so CA + mount can fire in one macro.
+    local state = setup_env({
+        mounts = {
+            { spellID = 5201, name = "Brown Horse", mountType = 0x01 },
+        },
+        known_spells = {
+            [32223] = true,
+        },
+        spell_infos = {
+            [5201] = { name = "Brown Horse", icon = "icon" },
+            [32223] = { name = "Crusader Aura", icon = "crusader" },
+        },
+        player_class = { "Paladin", "PALADIN" },
+        shapeshift_forms = {
+            { spellID = 465, isActive = true },
+        },
+        char_db = {
+            groundMounts = { 5201 },
+            flyingMounts = {},
+            crusaderAura = true,
+        },
+        c_map_enabled = false,
+    })
+
+    -- Single press: companion mount → CA + mount in one macro line
+    trigger_secure_mount(state)
+    assert_true(string.find(state.last_binding_macrotext, "Crusader Aura", 1, true) ~= nil,
+        "macrotext should include Crusader Aura")
+    assert_true(string.find(state.last_binding_macrotext, "Brown Horse", 1, true) ~= nil,
+        "macrotext should include the mount in the same press")
+    assert_equal(#state.macro_cast_lines, 2, "both CA and mount should appear as cast lines")
+    assert_equal(state.macro_cast_lines[1], "Crusader Aura", "first cast line should be Crusader Aura")
+    assert_equal(state.macro_cast_lines[2], "Brown Horse", "second cast line should be the mount")
+end)
+
+run_test("crusader aura is not applied when feature is disabled", function()
+    local state = setup_env({
+        mounts = {
+            { spellID = 5202, name = "Warhorse", mountType = 0x01 },
+        },
+        known_spells = {
+            [32223] = true,
+        },
+        spell_infos = {
+            [5202] = { name = "Warhorse", icon = "icon" },
+            [32223] = { name = "Crusader Aura", icon = "crusader" },
+        },
+        player_class = { "Paladin", "PALADIN" },
+        char_db = {
+            groundMounts = { 5202 },
+            flyingMounts = {},
+            crusaderAura = false,
+        },
+        c_map_enabled = false,
+    })
+
+    trigger_secure_mount(state)
+
+    assert_true(state.last_binding_macrotext ~= nil, "macrotext should be set")
+    assert_true(string.find(state.last_binding_macrotext, "Crusader Aura", 1, true) == nil, "macrotext should not contain Crusader Aura when disabled")
+    assert_equal(#state.macro_cast_lines, 1, "only one cast line when disabled")
+    assert_equal(state.macro_cast_lines[1], "Warhorse", "cast line should be the mount only")
+end)
+
+run_test("crusader aura is not applied for non-paladin classes", function()
+    local state = setup_env({
+        mounts = {
+            { spellID = 5203, name = "Brown Horse", mountType = 0x01 },
+        },
+        known_spells = {},
+        spell_infos = {
+            [5203] = { name = "Brown Horse", icon = "icon" },
+        },
+        player_class = { "Warrior", "WARRIOR" },
+        char_db = {
+            groundMounts = { 5203 },
+            flyingMounts = {},
+            crusaderAura = true,
+        },
+        c_map_enabled = false,
+    })
+
+    trigger_secure_mount(state)
+
+    assert_true(state.last_binding_macrotext ~= nil, "macrotext should be set")
+    assert_true(string.find(state.last_binding_macrotext, "Crusader Aura", 1, true) == nil, "macrotext should not contain Crusader Aura for non-paladins")
+end)
+
+run_test("saved aura is restored in macrotext on dismount", function()
+    local state = setup_env({
+        mounts = {},  -- no companion mounts; class mount added via known_spells path
+        known_spells = {
+            [13819] = true,  -- Summon Warhorse
+            [32223] = true,  -- Crusader Aura
+        },
+        spell_infos = {
+            [13819] = { name = "Summon Warhorse", icon = "icon" },
+            [32223] = { name = "Crusader Aura", icon = "crusader" },
+            [465] = { name = "Devotion Aura", icon = "devotion" },
+        },
+        player_class = { "Paladin", "PALADIN" },
+        shapeshift_forms = {
+            { spellID = 465, isActive = true },
+        },
+        char_db = {
+            groundMounts = { 13819 },
+            flyingMounts = {},
+            crusaderAura = true,
+        },
+        c_map_enabled = false,
+    })
+
+    -- Press 1: Devotion Aura active → switch to Crusader Aura, save Devotion Aura
+    trigger_secure_mount(state)
+    assert_equal(state.last_binding_macrotext, "/cast Crusader Aura", "first press should switch to Crusader Aura")
+
+    -- Simulate CA becoming active
+    state.shapeshift_forms = { { spellID = 32223, isActive = true } }
+
+    -- Press 2: CA active → mount
+    trigger_secure_mount(state)
+    assert_equal(state.last_cast_spell_name, "Summon Warhorse", "second press should cast the mount")
+
+    -- Simulate being mounted
+    state.mounted = true
+
+    -- Press 3: dismount → restore Devotion Aura
+    trigger_secure_mount(state)
+    assert_true(state.dismounted, "third press should dismount")
+    assert_true(string.find(state.last_binding_macrotext, "Devotion Aura", 1, true) ~= nil, "dismount macrotext should include the saved aura")
+end)
+
+run_test("no aura restoration when crusader aura feature is disabled on dismount", function()
+    local state = setup_env({
+        mounts = {
+            { spellID = 5205, name = "Warhorse", mountType = 0x01 },
+        },
+        player_class = { "Paladin", "PALADIN" },
+        char_db = {
+            groundMounts = { 5205 },
+            flyingMounts = {},
+            crusaderAura = false,
+        },
+        c_map_enabled = false,
+        mounted = true,
+    })
+
+    trigger_secure_mount(state)
+
+    assert_equal(state.last_binding_macrotext, "/dismount", "disabled feature should produce plain dismount")
+end)
+
+run_test("unit aura event restores saved aura when dismounted outside combat", function()
+    local state = setup_env({
+        mounts = {},  -- no companion mounts; class mount added via known_spells path
+        known_spells = {
+            [13819] = true,  -- Summon Warhorse
+            [32223] = true,  -- Crusader Aura
+        },
+        spell_infos = {
+            [13819] = { name = "Summon Warhorse", icon = "icon" },
+            [32223] = { name = "Crusader Aura", icon = "crusader" },
+            [465] = { name = "Devotion Aura", icon = "devotion" },
+        },
+        player_class = { "Paladin", "PALADIN" },
+        shapeshift_forms = {
+            { spellID = 465, isActive = true },
+        },
+        char_db = {
+            groundMounts = { 13819 },
+            flyingMounts = {},
+            crusaderAura = true,
+        },
+        c_map_enabled = false,
+    })
+
+    -- Mount via keybind so savedAura is set
+    trigger_secure_mount(state)
+
+    -- Simulate mount happening (player is now mounted)
+    state.mounted = true
+
+    -- Simulate wasMountedState update by firing UNIT_AURA while mounted
+    local event_frame
+    for _, frame in ipairs(state.frames) do
+        if frame.events["UNIT_AURA"] and frame.scripts["OnEvent"] then
+            event_frame = frame
+            break
+        end
+    end
+    assert_true(event_frame ~= nil, "event frame should be registered for UNIT_AURA")
+    event_frame.scripts["OnEvent"](event_frame, "UNIT_AURA", "player")
+
+    -- Simulate dismount (player is no longer mounted)
+    state.mounted = false
+    state.last_cast_spell_name = nil
+
+    -- Fire UNIT_AURA again to detect the dismount
+    event_frame.scripts["OnEvent"](event_frame, "UNIT_AURA", "player")
+
+    assert_equal(state.last_cast_spell_name, "Devotion Aura", "UNIT_AURA handler should restore the saved aura on dismount")
+end)
+
+run_test("minimap dismount restores saved aura", function()
+    local state = setup_env({
+        mounts = {},  -- no companion mounts; class mount added via known_spells path
+        known_spells = {
+            [13819] = true,  -- Summon Warhorse
+            [32223] = true,  -- Crusader Aura
+        },
+        spell_infos = {
+            [13819] = { name = "Summon Warhorse", icon = "icon" },
+            [32223] = { name = "Crusader Aura", icon = "crusader" },
+            [465] = { name = "Devotion Aura", icon = "devotion" },
+        },
+        player_class = { "Paladin", "PALADIN" },
+        shapeshift_forms = {
+            { spellID = 465, isActive = true },
+        },
+        char_db = {
+            groundMounts = { 13819 },
+            flyingMounts = {},
+            crusaderAura = true,
+        },
+        c_map_enabled = false,
+    })
+
+    -- Mount via keybind to save the aura
+    trigger_secure_mount(state)
+
+    -- Now simulate being mounted and dismounting via minimap
+    state.mounted = true
+    state.last_cast_spell_name = nil
+
+    local minimap_button = _G.OneButtonMountMinimapButton
+    assert_true(minimap_button ~= nil, "minimap button should exist")
+    minimap_button.scripts["OnClick"](minimap_button, "RightButton")
+
+    assert_true(state.dismounted, "minimap right-click should dismount")
+    assert_equal(state.last_cast_spell_name, "Devotion Aura", "minimap dismount should restore the saved aura")
+end)
+
+run_test("cancelling mount cast restores previous aura via UNIT_SPELLCAST_INTERRUPTED", function()
+    local state = setup_env({
+        mounts = {},  -- no companion mounts; class mount added via known_spells path
+        known_spells = {
+            [13819] = true,  -- Summon Warhorse
+            [32223] = true,  -- Crusader Aura
+        },
+        spell_infos = {
+            [13819] = { name = "Summon Warhorse", icon = "icon" },
+            [32223] = { name = "Crusader Aura", icon = "crusader" },
+            [465] = { name = "Devotion Aura", icon = "devotion" },
+        },
+        player_class = { "Paladin", "PALADIN" },
+        shapeshift_forms = {
+            { spellID = 465, isActive = true },
+        },
+        char_db = {
+            groundMounts = { 13819 },
+            flyingMounts = {},
+            crusaderAura = true,
+        },
+        c_map_enabled = false,
+    })
+
+    local event_frame
+    for _, frame in ipairs(state.frames) do
+        if frame.events["UNIT_SPELLCAST_INTERRUPTED"] and frame.scripts["OnEvent"] then
+            event_frame = frame
+            break
+        end
+    end
+    assert_true(event_frame ~= nil, "event frame should be registered for UNIT_SPELLCAST_INTERRUPTED")
+
+    -- Press 1: save Devotion Aura, switch to Crusader Aura
+    trigger_secure_mount(state)
+    state.shapeshift_forms = { { spellID = 32223, isActive = true } }
+
+    -- Press 2: mount cast begins (mountingInProgress = true)
+    trigger_secure_mount(state)
+
+    -- Player cancels mount cast (moves, Escape, etc.)
+    state.last_cast_spell_name = nil
+    event_frame.scripts["OnEvent"](event_frame, "UNIT_SPELLCAST_INTERRUPTED", "player")
+
+    assert_equal(state.last_cast_spell_name, "Devotion Aura", "cancelled mount should restore the previous aura")
 end)
 
 print(string.format("Ran %d tests, %d failures", total, failures))

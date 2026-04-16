@@ -1,5 +1,13 @@
 ## [Unreleased]
 
+## [1.0.24] - 2026-04-16
+
+### Added
+- Added opt-in "Crusader Aura on Mount" checkbox to the config UI, visible only for Paladins who know Crusader Aura (spell 32223); unchecked by default
+- When enabled, the first button press switches to Crusader Aura (if not already active); the second press mounts — avoiding the GCD conflict that caused "spell is not ready" on Paladin class mounts
+- Cancelling the mount cast (`UNIT_SPELLCAST_INTERRUPTED`) automatically restores the previous aura and deactivates Crusader Aura
+- Previously active paladin aura is restored after any dismount, including accidental dismounts detected via `UNIT_AURA`
+
 ## [1.0.23] - 2026-04-11
 
 ### Fixed
