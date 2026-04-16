@@ -1773,7 +1773,7 @@ run_test("config window position is stored per character", function()
     assert_equal(OneButtonMountDB.configPosition, nil, "legacy account-wide config position should remain unused")
 end)
 
-run_test("crusader aura is prepended to mount macrotext for paladins with the feature enabled", function()
+run_test("crusader aura is cast alone on first press when not active; mount fires on second press", function()
     local state = setup_env({
         mounts = {
             { spellID = 5201, name = "Warhorse", mountType = 0x01 },
@@ -1797,13 +1797,18 @@ run_test("crusader aura is prepended to mount macrotext for paladins with the fe
         c_map_enabled = false,
     })
 
+    -- First press: CA not active → only switch aura, no mount
     trigger_secure_mount(state)
+    assert_equal(state.last_binding_macrotext, "/cast Crusader Aura", "first press should only cast Crusader Aura")
+    assert_equal(#state.macro_cast_lines, 1, "first press should have exactly one cast line")
+    assert_equal(state.macro_cast_lines[1], "Crusader Aura", "first press cast should be Crusader Aura")
 
-    assert_true(state.last_binding_macrotext ~= nil, "macrotext should be set")
-    assert_true(string.find(state.last_binding_macrotext, "!Crusader Aura", 1, true) ~= nil, "macrotext should contain !Crusader Aura to prevent toggle-off")
-    assert_true(string.find(state.last_binding_macrotext, "Warhorse", 1, true) ~= nil, "macrotext should contain the mount")
-    assert_equal(state.macro_cast_lines[1], "Crusader Aura", "first cast should be Crusader Aura")
-    assert_equal(state.macro_cast_lines[2], "Warhorse", "second cast line should be the mount spell")
+    -- Simulate CA becoming active
+    state.shapeshift_forms = { { spellID = 32223, isActive = true } }
+
+    -- Second press: CA active → mount fires without GCD issue
+    trigger_secure_mount(state)
+    assert_equal(state.last_cast_spell_id, 5201, "second press should cast the mount")
 end)
 
 run_test("crusader aura is not applied when feature is disabled", function()
@@ -1884,16 +1889,23 @@ run_test("saved aura is restored in macrotext on dismount", function()
         c_map_enabled = false,
     })
 
-    -- First press: mount (saves Devotion Aura, prepends Crusader Aura)
+    -- Press 1: Devotion Aura active → switch to Crusader Aura, save Devotion Aura
     trigger_secure_mount(state)
-    assert_true(string.find(state.last_binding_macrotext, "!Crusader Aura", 1, true) ~= nil, "first press macrotext should include !Crusader Aura")
+    assert_equal(state.last_binding_macrotext, "/cast Crusader Aura", "first press should switch to Crusader Aura")
 
-    -- Simulate being mounted now
+    -- Simulate CA becoming active
+    state.shapeshift_forms = { { spellID = 32223, isActive = true } }
+
+    -- Press 2: CA active → mount
+    trigger_secure_mount(state)
+    assert_equal(state.last_cast_spell_name, "Warhorse", "second press should cast the mount")
+
+    -- Simulate being mounted
     state.mounted = true
 
-    -- Second press: dismount (should restore Devotion Aura)
+    -- Press 3: dismount → restore Devotion Aura
     trigger_secure_mount(state)
-    assert_true(state.dismounted, "dismount should be in macrotext")
+    assert_true(state.dismounted, "third press should dismount")
     assert_true(string.find(state.last_binding_macrotext, "Devotion Aura", 1, true) ~= nil, "dismount macrotext should include the saved aura")
 end)
 
@@ -2007,6 +2019,54 @@ run_test("minimap dismount restores saved aura", function()
 
     assert_true(state.dismounted, "minimap right-click should dismount")
     assert_equal(state.last_cast_spell_name, "Devotion Aura", "minimap dismount should restore the saved aura")
+end)
+
+run_test("cancelling mount cast restores previous aura via UNIT_SPELLCAST_INTERRUPTED", function()
+    local state = setup_env({
+        mounts = {
+            { spellID = 5208, name = "Warhorse", mountType = 0x01 },
+        },
+        known_spells = {
+            [32223] = true,
+        },
+        spell_infos = {
+            [5208] = { name = "Warhorse", icon = "icon" },
+            [32223] = { name = "Crusader Aura", icon = "crusader" },
+            [465] = { name = "Devotion Aura", icon = "devotion" },
+        },
+        player_class = { "Paladin", "PALADIN" },
+        shapeshift_forms = {
+            { spellID = 465, isActive = true },
+        },
+        char_db = {
+            groundMounts = { 5208 },
+            flyingMounts = {},
+            crusaderAura = true,
+        },
+        c_map_enabled = false,
+    })
+
+    local event_frame
+    for _, frame in ipairs(state.frames) do
+        if frame.events["UNIT_SPELLCAST_INTERRUPTED"] and frame.scripts["OnEvent"] then
+            event_frame = frame
+            break
+        end
+    end
+    assert_true(event_frame ~= nil, "event frame should be registered for UNIT_SPELLCAST_INTERRUPTED")
+
+    -- Press 1: save Devotion Aura, switch to Crusader Aura
+    trigger_secure_mount(state)
+    state.shapeshift_forms = { { spellID = 32223, isActive = true } }
+
+    -- Press 2: mount cast begins (mountingInProgress = true)
+    trigger_secure_mount(state)
+
+    -- Player cancels mount cast (moves, Escape, etc.)
+    state.last_cast_spell_name = nil
+    event_frame.scripts["OnEvent"](event_frame, "UNIT_SPELLCAST_INTERRUPTED", "player")
+
+    assert_equal(state.last_cast_spell_name, "Devotion Aura", "cancelled mount should restore the previous aura")
 end)
 
 print(string.format("Ran %d tests, %d failures", total, failures))

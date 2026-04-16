@@ -84,6 +84,7 @@ local minimapButton = nil
 local allMounts = {}        -- { spellID, name, icon, isFlying, canDetermineFlying, index, journalID }
 local savedAuraBeforeMount = nil
 local wasMountedState = false
+local mountingInProgress = false
 
 -- ============================================================================
 -- Utility
@@ -1306,16 +1307,26 @@ local function SummonRandomMount()
         return
     end
 
-    if ShouldUseCrusaderAura() and not IsCrusaderAuraActive() then
+    if ShouldUseCrusaderAura() then
+        if not IsCrusaderAuraActive() then
+            -- CA not yet active: switch aura now, mount on the next press
+            if not savedAuraBeforeMount then
+                SaveCurrentAura()
+            end
+            if CastSpellByID then
+                CastSpellByID(CRUSADER_AURA_SPELL_ID)
+            elseif CastSpellByName then
+                CastSpellByName(GetCrusaderAuraName())
+            end
+            return
+        end
+        -- CA already active: save the aura we're about to leave behind (if not already saved)
         if not savedAuraBeforeMount then
             SaveCurrentAura()
         end
-        if CastSpellByID then
-            CastSpellByID(CRUSADER_AURA_SPELL_ID)
-        elseif CastSpellByName then
-            CastSpellByName(GetCrusaderAuraName())
-        end
     end
+
+    mountingInProgress = true
 
     -- Pick a random mount from the pool
     local spellID = pool[math.random(#pool)]
@@ -1451,14 +1462,22 @@ bindingFrame:SetScript("PreClick", function(self, button)
     end
 
     if ShouldUseCrusaderAura() then
+        if not IsCrusaderAuraActive() then
+            -- CA not yet active: switch aura now, mount on the next press
+            if not savedAuraBeforeMount then
+                SaveCurrentAura()
+            end
+            self:SetAttribute("macrotext", "/cast " .. GetCrusaderAuraName())
+            return
+        end
+        -- CA already active: save the aura we're about to leave behind (if not already saved)
         if not savedAuraBeforeMount then
             SaveCurrentAura()
         end
-        local crusaderName = GetCrusaderAuraName()
-        self:SetAttribute("macrotext", "/cast !" .. crusaderName .. "\n" .. mountLine)
-    else
-        self:SetAttribute("macrotext", mountLine)
     end
+
+    mountingInProgress = true
+    self:SetAttribute("macrotext", mountLine)
 end)
 
 local function RestoreKeybind()
@@ -2239,6 +2258,7 @@ eventFrame:RegisterEvent("ADDON_LOADED")
 eventFrame:RegisterEvent("PLAYER_ENTERING_WORLD")
 eventFrame:RegisterEvent("COMPANION_UPDATE")
 eventFrame:RegisterEvent("UNIT_AURA")
+eventFrame:RegisterEvent("UNIT_SPELLCAST_INTERRUPTED")
 
 eventFrame:SetScript("OnEvent", function(self, event, arg1, ...)
     if event == "ADDON_LOADED" and arg1 == addonName then
@@ -2271,7 +2291,12 @@ eventFrame:SetScript("OnEvent", function(self, event, arg1, ...)
 
     elseif event == "UNIT_AURA" and arg1 == "player" then
         local nowMounted = IsMounted and IsMounted() or false
-        if wasMountedState and not nowMounted then
+        if not wasMountedState and nowMounted then
+            -- Just mounted: cast completed
+            mountingInProgress = false
+        elseif wasMountedState and not nowMounted then
+            -- Just dismounted
+            mountingInProgress = false
             if savedAuraBeforeMount and ShouldUseCrusaderAura() and not InCombatLockdown() then
                 local auraName = savedAuraBeforeMount
                 ClearSavedAura()
@@ -2283,5 +2308,17 @@ eventFrame:SetScript("OnEvent", function(self, event, arg1, ...)
             end
         end
         wasMountedState = nowMounted
+
+    elseif event == "UNIT_SPELLCAST_INTERRUPTED" and arg1 == "player" then
+        if mountingInProgress and savedAuraBeforeMount and ShouldUseCrusaderAura() and not InCombatLockdown() then
+            local auraName = savedAuraBeforeMount
+            ClearSavedAura()
+            mountingInProgress = false
+            -- Casting the previous aura deactivates Crusader Aura automatically
+            if CastSpellByName then
+                CastSpellByName(auraName)
+            end
+        end
+        mountingInProgress = false
     end
 end)
