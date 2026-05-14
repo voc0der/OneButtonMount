@@ -62,6 +62,20 @@ local SPELL_MOUNT_ALIASES = {
 local MOUNT_TYPE_FLAG_FLYING = 0x02
 
 local CRUSADER_AURA_SPELL_ID = 32223
+local CRUSADER_AURA_DISABLE_NEVER = "never"
+local CRUSADER_AURA_DISABLE_PVP = "pvp"
+local CRUSADER_AURA_DISABLE_RAID = "raid"
+local CRUSADER_AURA_DISABLE_BOTH = "both"
+local CRUSADER_AURA_DISABLE_OPTIONS = {
+    { value = CRUSADER_AURA_DISABLE_NEVER, label = "Neither" },
+    { value = CRUSADER_AURA_DISABLE_PVP, label = "PvP" },
+    { value = CRUSADER_AURA_DISABLE_RAID, label = "Raids" },
+    { value = CRUSADER_AURA_DISABLE_BOTH, label = "PvP and Raids" },
+}
+local CRUSADER_AURA_DISABLE_LABELS = {}
+for _, option in ipairs(CRUSADER_AURA_DISABLE_OPTIONS) do
+    CRUSADER_AURA_DISABLE_LABELS[option.value] = option.label
+end
 
 -- Temple of Ahn'Qiraj (AQ40)
 local AQ40_INSTANCE_ID = 531
@@ -1212,12 +1226,70 @@ local function GetCrusaderAuraFeatureEnabled()
     return GetCharacterDB().crusaderAura == true
 end
 
-local function ShouldUseCrusaderAura()
-    if not GetCrusaderAuraFeatureEnabled() then return false end
+local function GetCrusaderAuraDisableMode()
+    local mode = GetCharacterDB().crusaderAuraDisableMode
+    if CRUSADER_AURA_DISABLE_LABELS[mode] then
+        return mode
+    end
+
+    return CRUSADER_AURA_DISABLE_NEVER
+end
+
+local function GetCrusaderAuraDisableModeLabel(mode)
+    return CRUSADER_AURA_DISABLE_LABELS[mode] or CRUSADER_AURA_DISABLE_LABELS[CRUSADER_AURA_DISABLE_NEVER]
+end
+
+local function GetPlayerInstanceType()
+    if IsInInstance then
+        local inInstance, instanceType = IsInInstance()
+        if inInstance and instanceType and instanceType ~= "" and instanceType ~= "none" then
+            return instanceType
+        end
+    end
+
+    if GetInstanceInfo then
+        local _, instanceType = GetInstanceInfo()
+        if instanceType and instanceType ~= "" and instanceType ~= "none" then
+            return instanceType
+        end
+    end
+
+    return nil
+end
+
+local function ShouldDisableCrusaderAuraForContent()
+    local mode = GetCrusaderAuraDisableMode()
+    if mode == CRUSADER_AURA_DISABLE_NEVER then
+        return false
+    end
+
+    local instanceType = GetPlayerInstanceType()
+    local isPvP = instanceType == "pvp" or instanceType == "arena"
+    local isRaid = instanceType == "raid"
+
+    if mode == CRUSADER_AURA_DISABLE_PVP then
+        return isPvP
+    elseif mode == CRUSADER_AURA_DISABLE_RAID then
+        return isRaid
+    elseif mode == CRUSADER_AURA_DISABLE_BOTH then
+        return isPvP or isRaid
+    end
+
+    return false
+end
+
+local function CanConfigureCrusaderAura()
     if not UnitClass then return false end
     local _, class = UnitClass("player")
     if class ~= "PALADIN" then return false end
     return IsPlayerSpellKnown(CRUSADER_AURA_SPELL_ID, "Crusader Aura")
+end
+
+local function ShouldUseCrusaderAura()
+    if not GetCrusaderAuraFeatureEnabled() then return false end
+    if not CanConfigureCrusaderAura() then return false end
+    if ShouldDisableCrusaderAuraForContent() then return false end
+    return true
 end
 
 local function GetActiveNonCrusaderAuraName()
@@ -1636,6 +1708,36 @@ end
 local POOL_GROUND = "ground"
 local POOL_FLYING = "flying"
 
+local function UpdateCrusaderAuraDisableDropdown()
+    if not configFrame or not configFrame.crusaderAuraDisableDropdown then
+        return
+    end
+
+    local dropdown = configFrame.crusaderAuraDisableDropdown
+    local mode = GetCrusaderAuraDisableMode()
+    local label = GetCrusaderAuraDisableModeLabel(mode)
+
+    dropdown.selectedMode = mode
+    if UIDropDownMenu_SetSelectedValue then
+        UIDropDownMenu_SetSelectedValue(dropdown, mode)
+    end
+    if UIDropDownMenu_SetText then
+        UIDropDownMenu_SetText(dropdown, label)
+    elseif dropdown.SetText then
+        dropdown:SetText(label)
+    end
+end
+
+local function SetCrusaderAuraDisableMode(mode)
+    local characterDB = GetCharacterDB()
+    if not CRUSADER_AURA_DISABLE_LABELS[mode] then
+        mode = CRUSADER_AURA_DISABLE_NEVER
+    end
+
+    characterDB.crusaderAuraDisableMode = mode
+    UpdateCrusaderAuraDisableDropdown()
+end
+
 local function CreateMountIcon(parent, mountData, pool, index)
     local btn = CreateFrame("Button", nil, parent)
     btn:SetSize(36, 36)
@@ -1939,7 +2041,7 @@ function OneButtonMount:CreateConfigUI()
     -- ========================================================================
     -- Crusader Aura (Paladin only)
     -- ========================================================================
-    if UnitClass and select(2, UnitClass("player")) == "PALADIN" and IsPlayerSpellKnown(CRUSADER_AURA_SPELL_ID, "Crusader Aura") then
+    if CanConfigureCrusaderAura() then
         local crusaderAuraCheck = CreateFrame("CheckButton", nil, configFrame, "UICheckButtonTemplate")
         crusaderAuraCheck:SetPoint("TOPLEFT", configFrame, "TOPLEFT", 12, yOffset)
         crusaderAuraCheck:SetChecked(GetCrusaderAuraFeatureEnabled())
@@ -1952,17 +2054,77 @@ function OneButtonMount:CreateConfigUI()
 
         crusaderAuraCheck:SetScript("OnClick", function(self)
             characterDB.crusaderAura = self:GetChecked() and true or false
+            OneButtonMount:RefreshConfigUI()
         end)
 
         yOffset = yOffset - 35
+
+        configFrame.poolsStartOffsetWithoutCrusaderDropdown = yOffset
+
+        local crusaderAuraDisableLabel = configFrame:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+        crusaderAuraDisableLabel:SetPoint("TOPLEFT", configFrame, "TOPLEFT", 45, yOffset + 2)
+        crusaderAuraDisableLabel:SetText("Disable in:")
+        configFrame.crusaderAuraDisableLabel = crusaderAuraDisableLabel
+
+        local crusaderAuraDisableDropdown = CreateFrame("Frame", "OneButtonMountCrusaderAuraDisableDropdown", configFrame, "UIDropDownMenuTemplate")
+        crusaderAuraDisableDropdown:SetPoint("LEFT", crusaderAuraDisableLabel, "RIGHT", -12, -2)
+        configFrame.crusaderAuraDisableDropdown = crusaderAuraDisableDropdown
+
+        if UIDropDownMenu_SetWidth then
+            UIDropDownMenu_SetWidth(crusaderAuraDisableDropdown, 135)
+        else
+            crusaderAuraDisableDropdown:SetSize(155, 25)
+        end
+
+        if UIDropDownMenu_Initialize then
+            UIDropDownMenu_Initialize(crusaderAuraDisableDropdown, function()
+                for _, option in ipairs(CRUSADER_AURA_DISABLE_OPTIONS) do
+                    local optionValue = option.value
+                    local info = UIDropDownMenu_CreateInfo and UIDropDownMenu_CreateInfo() or {}
+                    info.text = option.label
+                    info.value = optionValue
+                    info.checked = GetCrusaderAuraDisableMode() == optionValue
+                    info.func = function()
+                        SetCrusaderAuraDisableMode(optionValue)
+                        if CloseDropDownMenus then
+                            CloseDropDownMenus()
+                        end
+                    end
+                    UIDropDownMenu_AddButton(info)
+                end
+            end)
+        else
+            crusaderAuraDisableDropdown:SetScript("OnClick", function()
+                local currentMode = GetCrusaderAuraDisableMode()
+                local nextMode = CRUSADER_AURA_DISABLE_NEVER
+                for index, option in ipairs(CRUSADER_AURA_DISABLE_OPTIONS) do
+                    if option.value == currentMode then
+                        local nextOption = CRUSADER_AURA_DISABLE_OPTIONS[index + 1] or CRUSADER_AURA_DISABLE_OPTIONS[1]
+                        nextMode = nextOption.value
+                        break
+                    end
+                end
+                SetCrusaderAuraDisableMode(nextMode)
+            end)
+        end
+
+        yOffset = yOffset - 35
+        configFrame.poolsStartOffsetWithCrusaderDropdown = yOffset
     end
 
-    configFrame.poolsStartOffset = yOffset
+    if configFrame.poolsStartOffsetWithCrusaderDropdown and GetCrusaderAuraFeatureEnabled() then
+        configFrame.poolsStartOffset = configFrame.poolsStartOffsetWithCrusaderDropdown
+    elseif configFrame.poolsStartOffsetWithoutCrusaderDropdown then
+        configFrame.poolsStartOffset = configFrame.poolsStartOffsetWithoutCrusaderDropdown
+    else
+        configFrame.poolsStartOffset = yOffset
+    end
+    yOffset = configFrame.poolsStartOffset
 
     -- ========================================================================
     -- Ground Mount Pool
     -- ========================================================================
-    local groundContainer, groundLabel = CreatePoolSection(configFrame, "Ground Mount Rotation", POOL_GROUND, yOffset)
+    local groundContainer, groundLabel = CreatePoolSection(configFrame, "Ground Mount Rotation", POOL_GROUND, configFrame.poolsStartOffset)
     configFrame.groundContainer = groundContainer
     configFrame.groundLabel = groundLabel
 
@@ -2021,7 +2183,20 @@ function OneButtonMount:RefreshConfigUI()
         configFrame.textualFeedbackCheckbox:SetChecked(ShowTextualFeedback())
     end
     if configFrame.crusaderAuraCheckbox then
-        configFrame.crusaderAuraCheckbox:SetChecked(GetCrusaderAuraFeatureEnabled())
+        local crusaderAuraEnabled = GetCrusaderAuraFeatureEnabled()
+        configFrame.crusaderAuraCheckbox:SetChecked(crusaderAuraEnabled)
+        if configFrame.crusaderAuraDisableLabel and configFrame.crusaderAuraDisableDropdown then
+            UpdateCrusaderAuraDisableDropdown()
+            if crusaderAuraEnabled then
+                configFrame.crusaderAuraDisableLabel:Show()
+                configFrame.crusaderAuraDisableDropdown:Show()
+                configFrame.poolsStartOffset = configFrame.poolsStartOffsetWithCrusaderDropdown
+            else
+                configFrame.crusaderAuraDisableLabel:Hide()
+                configFrame.crusaderAuraDisableDropdown:Hide()
+                configFrame.poolsStartOffset = configFrame.poolsStartOffsetWithoutCrusaderDropdown
+            end
+        end
     end
 
     -- Refresh ground pool
@@ -2231,6 +2406,9 @@ function OneButtonMount:InitDB()
     GetMinimapSettings()
     if characterDB.showTextualFeedback == nil then
         characterDB.showTextualFeedback = true
+    end
+    if not CRUSADER_AURA_DISABLE_LABELS[characterDB.crusaderAuraDisableMode] then
+        characterDB.crusaderAuraDisableMode = CRUSADER_AURA_DISABLE_NEVER
     end
     characterDB.profileVersion = CHARACTER_PROFILE_VERSION
 end
