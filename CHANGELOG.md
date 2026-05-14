@@ -1,5 +1,11 @@
 ## [Unreleased]
 
+## [1.0.25] - 2026-05-14
+
+### Added
+- Added a Paladin-only Crusader Aura context dropdown that can disable "Crusader Aura on Mount" in PvP, raids, both, or neither
+- Added regression coverage for the dropdown selection and PvP/raid suppression behavior
+
 ## [1.0.24] - 2026-04-16
 
 ### Added
