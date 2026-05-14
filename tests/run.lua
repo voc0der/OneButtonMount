@@ -214,6 +214,36 @@ local function setup_env(opts)
         Hide = function() end,
     }
 
+    _G.UIDropDownMenu_CreateInfo = function()
+        return {}
+    end
+    _G.UIDropDownMenu_SetWidth = function(frame, width)
+        frame.dropdown_width = width
+    end
+    _G.UIDropDownMenu_SetText = function(frame, text)
+        frame.text = text
+    end
+    _G.UIDropDownMenu_SetSelectedValue = function(frame, value)
+        frame.selected_value = value
+    end
+    _G.UIDropDownMenu_AddButton = function(info)
+        local dropdown = state.active_dropdown
+        if dropdown then
+            dropdown.menu_buttons = dropdown.menu_buttons or {}
+            table.insert(dropdown.menu_buttons, copy_table(info))
+        end
+    end
+    _G.UIDropDownMenu_Initialize = function(frame, init_function)
+        frame.initialize = init_function
+        frame.menu_buttons = {}
+        state.active_dropdown = frame
+        if init_function then
+            init_function(frame, 1)
+        end
+        state.active_dropdown = nil
+    end
+    _G.CloseDropDownMenus = function() end
+
     _G.SlashCmdList = {}
     _G.UISpecialFrames = {}
     _G.ElvUI = nil
@@ -232,7 +262,13 @@ local function setup_env(opts)
     _G.IsMounted = function() return state.mounted end
     _G.Dismount = function() state.dismounted = true end
     _G.IsIndoors = function() return state.indoors end
-    _G.IsInInstance = function() return state.in_instance, "none" end
+    _G.IsInInstance = function()
+        local instance_type = "none"
+        if state.instance_info and state.instance_info.instanceType then
+            instance_type = state.instance_info.instanceType
+        end
+        return state.in_instance, instance_type
+    end
     _G.GetInstanceInfo = function()
         if not state.instance_info then
             return nil
@@ -1771,6 +1807,146 @@ run_test("config window position is stored per character", function()
     assert_true(type(OneButtonMountCharDB.configPosition) == "table", "config position should be stored per character")
     assert_equal(OneButtonMountCharDB.configPosition.point, "CENTER", "config position point should be saved")
     assert_equal(OneButtonMountDB.configPosition, nil, "legacy account-wide config position should remain unused")
+end)
+
+local function setup_paladin_crusader_mount(opts)
+    opts = opts or {}
+    local instance_info = nil
+    local in_instance = false
+    if opts.instance_type then
+        instance_info = { name = opts.instance_type, instanceType = opts.instance_type }
+        in_instance = true
+    end
+
+    return setup_env({
+        mounts = {
+            { spellID = 5209, name = "Brown Horse", mountType = 0x01 },
+        },
+        known_spells = {
+            [32223] = true,
+        },
+        spell_infos = {
+            [5209] = { name = "Brown Horse", icon = "icon" },
+            [32223] = { name = "Crusader Aura", icon = "crusader" },
+            [465] = { name = "Devotion Aura", icon = "devotion" },
+        },
+        player_class = { "Paladin", "PALADIN" },
+        shapeshift_forms = {
+            { spellID = 465, isActive = true },
+        },
+        char_db = {
+            groundMounts = { 5209 },
+            flyingMounts = {},
+            crusaderAura = true,
+            crusaderAuraDisableMode = opts.disable_mode,
+        },
+        instance_info = instance_info,
+        in_instance = in_instance,
+        c_map_enabled = false,
+    })
+end
+
+local function assert_macro_skips_crusader_aura(state, message)
+    trigger_secure_mount(state)
+
+    assert_true(state.last_binding_macrotext ~= nil, message .. " should set macrotext")
+    assert_true(string.find(state.last_binding_macrotext, "Crusader Aura", 1, true) == nil, message .. " should not cast Crusader Aura")
+    assert_equal(#state.macro_cast_lines, 1, message .. " should only cast the mount")
+    assert_equal(state.macro_cast_lines[1], "Brown Horse", message .. " mount cast should remain")
+end
+
+run_test("crusader aura disable dropdown appears when paladin enables aura behavior", function()
+    setup_env({
+        mounts = {
+            { spellID = 5208, name = "Brown Horse", mountType = 0x01 },
+        },
+        known_spells = {
+            [32223] = true,
+        },
+        spell_infos = {
+            [5208] = { name = "Brown Horse", icon = "icon" },
+            [32223] = { name = "Crusader Aura", icon = "crusader" },
+        },
+        player_class = { "Paladin", "PALADIN" },
+        char_db = {
+            groundMounts = { 5208 },
+            flyingMounts = {},
+            crusaderAura = false,
+        },
+        c_map_enabled = false,
+    })
+
+    SlashCmdList["ONEBUTTONMOUNT"]("")
+
+    local config_frame = _G.OneButtonMountConfigFrame
+    assert_true(config_frame ~= nil, "config frame not created")
+    assert_true(config_frame.crusaderAuraCheckbox ~= nil, "crusader aura checkbox missing")
+    assert_true(config_frame.crusaderAuraDisableDropdown ~= nil, "crusader aura disable dropdown missing")
+    assert_true(not config_frame.crusaderAuraDisableDropdown:IsShown(), "dropdown should hide until the aura behavior is enabled")
+
+    config_frame.crusaderAuraCheckbox:SetChecked(true)
+    config_frame.crusaderAuraCheckbox.scripts["OnClick"](config_frame.crusaderAuraCheckbox)
+
+    local dropdown = config_frame.crusaderAuraDisableDropdown
+    assert_true(dropdown:IsShown(), "dropdown should show when the aura behavior is enabled")
+    assert_equal(dropdown.text, "Neither", "dropdown should default to neither")
+    assert_equal(#dropdown.menu_buttons, 4, "dropdown should expose four disable choices")
+
+    local pvp_option = nil
+    for _, option in ipairs(dropdown.menu_buttons) do
+        if option.value == "pvp" then
+            pvp_option = option
+            break
+        end
+    end
+    assert_true(pvp_option ~= nil, "PvP dropdown option missing")
+
+    pvp_option.func()
+
+    assert_equal(OneButtonMountCharDB.crusaderAuraDisableMode, "pvp", "dropdown should save the selected character option")
+    assert_equal(dropdown.text, "PvP", "dropdown text should update after selection")
+    assert_equal(OneButtonMountDB.crusaderAuraDisableMode, nil, "legacy account-wide settings should remain unused")
+end)
+
+run_test("crusader aura neither mode still applies in PvP", function()
+    local state = setup_paladin_crusader_mount({
+        instance_type = "pvp",
+        disable_mode = "never",
+    })
+
+    trigger_secure_mount(state)
+
+    assert_equal(state.last_binding_macrotext, "/cast Crusader Aura\n/cast Brown Horse", "neither mode should keep Crusader Aura enabled in PvP")
+    assert_equal(state.macro_cast_lines[1], "Crusader Aura", "first cast should remain Crusader Aura")
+    assert_equal(state.macro_cast_lines[2], "Brown Horse", "second cast should remain the mount")
+end)
+
+run_test("crusader aura PvP disable mode suppresses battlegrounds and arenas", function()
+    local battleground_state = setup_paladin_crusader_mount({
+        instance_type = "pvp",
+        disable_mode = "pvp",
+    })
+    assert_macro_skips_crusader_aura(battleground_state, "PvP disable mode in battlegrounds")
+
+    local arena_state = setup_paladin_crusader_mount({
+        instance_type = "arena",
+        disable_mode = "pvp",
+    })
+    assert_macro_skips_crusader_aura(arena_state, "PvP disable mode in arenas")
+end)
+
+run_test("crusader aura raid and both disable modes suppress raids", function()
+    local raid_state = setup_paladin_crusader_mount({
+        instance_type = "raid",
+        disable_mode = "raid",
+    })
+    assert_macro_skips_crusader_aura(raid_state, "raid disable mode")
+
+    local both_state = setup_paladin_crusader_mount({
+        instance_type = "raid",
+        disable_mode = "both",
+    })
+    assert_macro_skips_crusader_aura(both_state, "both disable mode")
 end)
 
 run_test("crusader aura is cast alone on first press for class spell mounts; mount fires on second press", function()
