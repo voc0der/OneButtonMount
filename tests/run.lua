@@ -1814,7 +1814,7 @@ local function setup_paladin_crusader_mount(opts)
     local instance_info = nil
     local in_instance = false
     if opts.instance_type then
-        instance_info = { name = opts.instance_type, instanceType = opts.instance_type }
+        instance_info = { name = opts.instance_name or opts.instance_type, instanceType = opts.instance_type, maxPlayers = opts.max_players }
         in_instance = true
     end
 
@@ -1855,6 +1855,14 @@ local function assert_macro_skips_crusader_aura(state, message)
     assert_equal(state.macro_cast_lines[1], "Brown Horse", message .. " mount cast should remain")
 end
 
+local function assert_macro_uses_crusader_aura(state, message)
+    trigger_secure_mount(state)
+
+    assert_equal(state.last_binding_macrotext, "/cast Crusader Aura\n/cast Brown Horse", message .. " should cast Crusader Aura before the mount")
+    assert_equal(state.macro_cast_lines[1], "Crusader Aura", message .. " first cast should be Crusader Aura")
+    assert_equal(state.macro_cast_lines[2], "Brown Horse", message .. " second cast should be the mount")
+end
+
 run_test("crusader aura disable dropdown appears when paladin enables aura behavior", function()
     setup_env({
         mounts = {
@@ -1893,13 +1901,26 @@ run_test("crusader aura disable dropdown appears when paladin enables aura behav
     assert_equal(#dropdown.menu_buttons, 4, "dropdown should expose four disable choices")
 
     local pvp_option = nil
+    local dungeon_option = nil
+    local both_option = nil
+    local raid_option = nil
     for _, option in ipairs(dropdown.menu_buttons) do
         if option.value == "pvp" then
             pvp_option = option
-            break
+        elseif option.value == "dungeon" then
+            dungeon_option = option
+        elseif option.value == "both" then
+            both_option = option
+        elseif option.value == "raid" then
+            raid_option = option
         end
     end
     assert_true(pvp_option ~= nil, "PvP dropdown option missing")
+    assert_true(dungeon_option ~= nil, "Dungeons dropdown option missing")
+    assert_true(both_option ~= nil, "PvP and Dungeons dropdown option missing")
+    assert_true(raid_option == nil, "Raids dropdown option should be replaced")
+    assert_equal(dungeon_option.text, "Dungeons", "dungeon option should use player-facing dungeon copy")
+    assert_equal(both_option.text, "PvP and Dungeons", "both option should use dungeon copy")
 
     pvp_option.func()
 
@@ -1935,18 +1956,45 @@ run_test("crusader aura PvP disable mode suppresses battlegrounds and arenas", f
     assert_macro_skips_crusader_aura(arena_state, "PvP disable mode in arenas")
 end)
 
-run_test("crusader aura raid and both disable modes suppress raids", function()
-    local raid_state = setup_paladin_crusader_mount({
-        instance_type = "raid",
-        disable_mode = "raid",
+run_test("crusader aura dungeon and both disable modes suppress dungeons", function()
+    local black_morass_state = setup_paladin_crusader_mount({
+        instance_type = "party",
+        instance_name = "The Black Morass",
+        max_players = 5,
+        disable_mode = "dungeon",
     })
-    assert_macro_skips_crusader_aura(raid_state, "raid disable mode")
+    assert_macro_skips_crusader_aura(black_morass_state, "dungeon disable mode in Black Morass")
 
     local both_state = setup_paladin_crusader_mount({
-        instance_type = "raid",
+        instance_type = "party",
         disable_mode = "both",
     })
     assert_macro_skips_crusader_aura(both_state, "both disable mode")
+end)
+
+run_test("crusader aura dungeon modes do not suppress raids", function()
+    local dungeon_mode_raid_state = setup_paladin_crusader_mount({
+        instance_type = "raid",
+        disable_mode = "dungeon",
+    })
+    assert_macro_uses_crusader_aura(dungeon_mode_raid_state, "dungeon disable mode in raids")
+
+    local both_mode_raid_state = setup_paladin_crusader_mount({
+        instance_type = "raid",
+        disable_mode = "both",
+    })
+    assert_macro_uses_crusader_aura(both_mode_raid_state, "PvP and Dungeons disable mode in raids")
+end)
+
+run_test("legacy crusader aura raid disable mode migrates to dungeon mode", function()
+    local state = setup_paladin_crusader_mount({
+        instance_type = "party",
+        instance_name = "The Black Morass",
+        disable_mode = "raid",
+    })
+
+    assert_equal(OneButtonMountCharDB.crusaderAuraDisableMode, "dungeon", "legacy raid mode should normalize to dungeon mode")
+    assert_macro_skips_crusader_aura(state, "legacy raid disable mode after migration")
 end)
 
 run_test("crusader aura is cast alone on first press for class spell mounts; mount fires on second press", function()

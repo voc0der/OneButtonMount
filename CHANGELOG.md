@@ -1,5 +1,12 @@
 ## [Unreleased]
 
+## [1.0.26] - 2026-05-17
+
+### Changed
+- Replaced the Crusader Aura "Raids" disable context with "Dungeons"; "PvP and Dungeons" now suppresses Crusader Aura in battlegrounds, arenas, and dungeon instances
+- Migrated the short-lived saved `raid` disable mode from `1.0.25` to the new dungeon mode
+- Added regression coverage for Black Morass-style dungeon suppression, PvP arena/battleground suppression, and raids no longer being suppressed by dungeon mode
+
 ## [1.0.25] - 2026-05-14
 
 ### Added
