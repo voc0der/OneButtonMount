@@ -1,5 +1,10 @@
 ## [Unreleased]
 
+## [1.0.27] - 2026-05-17
+
+### Changed
+- Updated the TBC Anniversary TOC interface to `20505` so CurseForge release tagging targets game version `2.5.5`.
+
 ## [1.0.26] - 2026-05-17
 
 ### Changed

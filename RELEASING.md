@@ -5,7 +5,7 @@
 OneButtonMount targets TBC Anniversary Classic. The TOC file specifies:
 
 ```
-## Interface: 20504
+## Interface: 20505
 ```
 
 ## Workflow Prerequisites
