@@ -64,13 +64,13 @@ local MOUNT_TYPE_FLAG_FLYING = 0x02
 local CRUSADER_AURA_SPELL_ID = 32223
 local CRUSADER_AURA_DISABLE_NEVER = "never"
 local CRUSADER_AURA_DISABLE_PVP = "pvp"
-local CRUSADER_AURA_DISABLE_RAID = "raid"
+local CRUSADER_AURA_DISABLE_DUNGEON = "dungeon"
 local CRUSADER_AURA_DISABLE_BOTH = "both"
 local CRUSADER_AURA_DISABLE_OPTIONS = {
     { value = CRUSADER_AURA_DISABLE_NEVER, label = "Neither" },
     { value = CRUSADER_AURA_DISABLE_PVP, label = "PvP" },
-    { value = CRUSADER_AURA_DISABLE_RAID, label = "Raids" },
-    { value = CRUSADER_AURA_DISABLE_BOTH, label = "PvP and Raids" },
+    { value = CRUSADER_AURA_DISABLE_DUNGEON, label = "Dungeons" },
+    { value = CRUSADER_AURA_DISABLE_BOTH, label = "PvP and Dungeons" },
 }
 local CRUSADER_AURA_DISABLE_LABELS = {}
 for _, option in ipairs(CRUSADER_AURA_DISABLE_OPTIONS) do
@@ -1226,13 +1226,23 @@ local function GetCrusaderAuraFeatureEnabled()
     return GetCharacterDB().crusaderAura == true
 end
 
-local function GetCrusaderAuraDisableMode()
-    local mode = GetCharacterDB().crusaderAuraDisableMode
+local function NormalizeCrusaderAuraDisableMode(mode)
+    if mode == "raid" then
+        return CRUSADER_AURA_DISABLE_DUNGEON
+    end
+
     if CRUSADER_AURA_DISABLE_LABELS[mode] then
         return mode
     end
 
     return CRUSADER_AURA_DISABLE_NEVER
+end
+
+local function GetCrusaderAuraDisableMode()
+    local characterDB = GetCharacterDB()
+    local mode = NormalizeCrusaderAuraDisableMode(characterDB.crusaderAuraDisableMode)
+    characterDB.crusaderAuraDisableMode = mode
+    return mode
 end
 
 local function GetCrusaderAuraDisableModeLabel(mode)
@@ -1265,14 +1275,14 @@ local function ShouldDisableCrusaderAuraForContent()
 
     local instanceType = GetPlayerInstanceType()
     local isPvP = instanceType == "pvp" or instanceType == "arena"
-    local isRaid = instanceType == "raid"
+    local isDungeon = instanceType == "party"
 
     if mode == CRUSADER_AURA_DISABLE_PVP then
         return isPvP
-    elseif mode == CRUSADER_AURA_DISABLE_RAID then
-        return isRaid
+    elseif mode == CRUSADER_AURA_DISABLE_DUNGEON then
+        return isDungeon
     elseif mode == CRUSADER_AURA_DISABLE_BOTH then
-        return isPvP or isRaid
+        return isPvP or isDungeon
     end
 
     return false
@@ -1730,9 +1740,7 @@ end
 
 local function SetCrusaderAuraDisableMode(mode)
     local characterDB = GetCharacterDB()
-    if not CRUSADER_AURA_DISABLE_LABELS[mode] then
-        mode = CRUSADER_AURA_DISABLE_NEVER
-    end
+    mode = NormalizeCrusaderAuraDisableMode(mode)
 
     characterDB.crusaderAuraDisableMode = mode
     UpdateCrusaderAuraDisableDropdown()
@@ -2407,9 +2415,7 @@ function OneButtonMount:InitDB()
     if characterDB.showTextualFeedback == nil then
         characterDB.showTextualFeedback = true
     end
-    if not CRUSADER_AURA_DISABLE_LABELS[characterDB.crusaderAuraDisableMode] then
-        characterDB.crusaderAuraDisableMode = CRUSADER_AURA_DISABLE_NEVER
-    end
+    characterDB.crusaderAuraDisableMode = NormalizeCrusaderAuraDisableMode(characterDB.crusaderAuraDisableMode)
     characterDB.profileVersion = CHARACTER_PROFILE_VERSION
 end
 
