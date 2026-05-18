@@ -1,5 +1,12 @@
 ## [Unreleased]
 
+## [1.0.28] - 2026-05-18
+
+### Added
+- Added movement-aware instant mount selection so eligible instant options like Druid Flight Form and Hallow's End brooms are preferred while moving
+- Added Druid Flight Form and Swift Flight Form to the spell-only flying mount candidates
+- Added regression coverage for moving instant-mount selection and stationary cast-time mount preference
+
 ## [1.0.27] - 2026-05-17
 
 ### Changed
