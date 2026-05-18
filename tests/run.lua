@@ -67,6 +67,7 @@ local function setup_env(opts)
         run_macro_text_available = opts.run_macro_text_available or false,
         player_class = opts.player_class or nil,
         shapeshift_forms = opts.shapeshift_forms or {},
+        player_moving = opts.player_moving or false,
     }
 
     _G.unpack = table.unpack
@@ -260,6 +261,7 @@ local function setup_env(opts)
 
     _G.InCombatLockdown = function() return state.in_combat end
     _G.IsMounted = function() return state.mounted end
+    _G.IsPlayerMoving = function() return state.player_moving end
     _G.Dismount = function() state.dismounted = true end
     _G.IsIndoors = function() return state.indoors end
     _G.IsInInstance = function()
@@ -326,22 +328,22 @@ local function setup_env(opts)
     _G.GetSpellInfo = function(spell_id)
         local spell_info = state.spell_infos[spell_id]
         if spell_info then
-            return spell_info.name, spell_info.rank, spell_info.icon
+            return spell_info.name, spell_info.rank, spell_info.icon, spell_info.castTime
         end
         for _, mount in ipairs(state.mounts) do
             if mount.spellID == spell_id then
-                return mount.name, nil, mount.icon or "icon"
+                return mount.name, nil, mount.icon or "icon", mount.castTime
             end
         end
         for _, mount in ipairs(state.mount_journal_mounts) do
             if mount.spellID == spell_id then
-                return mount.name, nil, mount.icon or "icon"
+                return mount.name, nil, mount.icon or "icon", mount.castTime
             end
         end
         for item_id, spell in pairs(state.item_spells) do
             if spell.spellID == spell_id then
                 local item_info = state.item_infos[item_id]
-                return spell.name, nil, item_info and item_info.icon or "icon"
+                return spell.name, nil, item_info and item_info.icon or "icon", spell.castTime
             end
         end
         return nil
@@ -1532,6 +1534,88 @@ run_test("spellbook fallback allows flying once riding is present", function()
     trigger_secure_mount(state)
 
     assert_equal(state.last_cast_spell_id, 3131, "riding found via spellbook fallback should allow the flying pool")
+end)
+
+run_test("moving prefers eligible instant flight form over cast-time flying mounts", function()
+    local state = setup_env({
+        mounts = {
+            { spellID = 3141, name = "Cast-Time Flying Mount", mountType = 0x02, castTime = 1500 },
+        },
+        known_spells = {
+            [33943] = true,
+            [34090] = true,
+        },
+        spell_infos = {
+            [33943] = { name = "Flight Form", icon = "flight" },
+        },
+        db = {
+            groundMounts = {},
+            flyingMounts = { 3141, 33943 },
+        },
+        player_moving = true,
+        player_level = 70,
+        is_flyable_area = true,
+        c_map_enabled = false,
+        real_zone_text = "Nagrand",
+    })
+
+    trigger_secure_mount(state)
+
+    assert_equal(state.last_binding_macrotext, "/cast !Flight Form", "moving should choose the hardcoded instant flight form")
+    assert_equal(state.last_cast_spell_id, 33943, "moving should cast flight form from the eligible instant pool")
+end)
+
+run_test("standing still prefers cast-time flying mounts when instant options are also eligible", function()
+    local state = setup_env({
+        mounts = {
+            { spellID = 3151, name = "Cast-Time Flying Mount", mountType = 0x02, castTime = 1500 },
+        },
+        known_spells = {
+            [33943] = true,
+            [34090] = true,
+        },
+        spell_infos = {
+            [33943] = { name = "Flight Form", icon = "flight" },
+        },
+        db = {
+            groundMounts = {},
+            flyingMounts = { 3151, 33943 },
+        },
+        player_moving = false,
+        player_level = 70,
+        is_flyable_area = true,
+        c_map_enabled = false,
+        real_zone_text = "Nagrand",
+    })
+
+    trigger_secure_mount(state)
+
+    assert_equal(state.last_cast_spell_id, 3151, "standing still should keep normal cast-time mounts preferred")
+end)
+
+run_test("moving prefers hardcoded instant broom item from the eligible pool", function()
+    local state = setup_env({
+        num_companions_mode = "no_values",
+        bag_items = { 33184, 37013 },
+        item_spells = {
+            [33184] = { name = "Swift Magic Broom", spellID = 42668 },
+            [37013] = { name = "Summon Cast-Time Ground Mount", spellID = 9162, castTime = 1500 },
+        },
+        item_infos = {
+            [33184] = { name = "Swift Magic Broom", icon = "broom", classID = 15, subClassID = 5, itemType = "Miscellaneous", itemSubType = "Mount" },
+            [37013] = { name = "Cast-Time Ground Mount Item", icon = "icon", classID = 15, subClassID = 5, itemType = "Miscellaneous", itemSubType = "Mount" },
+        },
+        db = {
+            groundMounts = { 42668, 9162 },
+            flyingMounts = {},
+        },
+        player_moving = true,
+        c_map_enabled = false,
+    })
+
+    trigger_secure_mount(state)
+
+    assert_equal(state.last_used_item_id, 33184, "moving should use the hardcoded instant broom item")
 end)
 
 run_test("non-flying mounts cannot be added to flying rotation", function()
