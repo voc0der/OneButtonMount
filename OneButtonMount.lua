@@ -48,12 +48,31 @@ local SPELL_MOUNT_SPELLS = {
     { spellID = 34767, name = "Summon Thalassian Charger", icon = "Interface\\Icons\\Ability_Mount_Charger", isFlying = false },
     { spellID = 5784, name = "Summon Felsteed", icon = "Interface\\Icons\\Spell_Nature_Swiftness", isFlying = false },
     { spellID = 23161, name = "Summon Dreadsteed", icon = "Interface\\Icons\\Ability_Mount_Dreadsteed", isFlying = false },
+    { spellID = 33943, name = "Flight Form", icon = "Interface\\Icons\\Ability_Druid_FlightForm", isFlying = true, instantCast = true, preventToggle = true },
+    { spellID = 40120, name = "Swift Flight Form", icon = "Interface\\Icons\\Ability_Druid_FlightForm", isFlying = true, instantCast = true, preventToggle = true },
 }
 local SPELL_MOUNT_ALIASES = {
     [13819] = { 13819, 34769 },
     [34769] = { 13819, 34769 },
     [23214] = { 23214, 34767 },
     [34767] = { 23214, 34767 },
+}
+
+-- Known instant mount/forms for TBC-era clients. The cast-time API is still
+-- checked at summon time, but these IDs cover cases where spell data is thin.
+local INSTANT_MOUNT_SPELL_IDS = {
+    [33943] = true, -- Flight Form
+    [40120] = true, -- Swift Flight Form
+    [42667] = true, -- Magic Broom
+    [42668] = true, -- Swift Magic Broom
+    [42680] = true, -- Flying Broom
+    [42683] = true, -- Swift Flying Broom
+}
+local INSTANT_MOUNT_ITEM_IDS = {
+    [33176] = true, -- Flying Broom
+    [33182] = true, -- Swift Flying Broom
+    [33183] = true, -- Magic Broom
+    [33184] = true, -- Swift Magic Broom
 }
 
 -- Mount type flags from GetCompanionInfo's 6th return value
@@ -609,12 +628,13 @@ local function ScanMounts()
     allMounts = {}
     local seenSpellIDs = {}
 
-    local function AddMountEntry(spellID, name, icon, isFlying, canDetermineFlying, index, journalID, itemID)
+    local function AddMountEntry(spellID, name, icon, isFlying, canDetermineFlying, index, journalID, itemID, instantCast, preventToggle)
         local normalizedSpellID = SafeToNumber(spellID)
         if not normalizedSpellID or seenSpellIDs[normalizedSpellID] then
             return
         end
 
+        local normalizedItemID = SafeToNumber(itemID)
         seenSpellIDs[normalizedSpellID] = true
         table.insert(allMounts, {
             spellID = normalizedSpellID,
@@ -624,7 +644,9 @@ local function ScanMounts()
             canDetermineFlying = not not canDetermineFlying,
             index = index,
             journalID = journalID,
-            itemID = itemID,
+            itemID = normalizedItemID,
+            instantCast = not not instantCast or INSTANT_MOUNT_SPELL_IDS[normalizedSpellID] or INSTANT_MOUNT_ITEM_IDS[normalizedItemID],
+            preventToggle = not not preventToggle,
         })
     end
 
@@ -826,7 +848,7 @@ local function ScanMounts()
                     end
                 end
 
-                AddMountEntry(resolvedSpellID, spellName, spellIcon, spellMount.isFlying, true, nil, nil, nil)
+                AddMountEntry(resolvedSpellID, spellName, spellIcon, spellMount.isFlying, true, nil, nil, nil, spellMount.instantCast, spellMount.preventToggle)
             end
         end
     end
@@ -1349,10 +1371,90 @@ local function BuildMountMacroText(spellID, mount)
 
     local spellName = GetSpellInfo and GetSpellInfo(spellID)
     if spellName then
+        if mount and mount.preventToggle then
+            return "/cast !" .. spellName
+        end
+
         return "/cast " .. spellName
     end
 
     return nil
+end
+
+local function GetMountSpellCastTime(spellID)
+    if GetSpellInfo then
+        local _, _, _, castTime = GetSpellInfo(spellID)
+        local normalizedCastTime = SafeToNumber(castTime)
+        if normalizedCastTime ~= nil then
+            return normalizedCastTime
+        end
+    end
+
+    if C_Spell and C_Spell.GetSpellInfo then
+        local spellInfo = C_Spell.GetSpellInfo(spellID)
+        if spellInfo and spellInfo.castTime ~= nil then
+            return SafeToNumber(spellInfo.castTime)
+        end
+    end
+
+    return nil
+end
+
+local function IsInstantCastMount(spellID, mount)
+    if mount and mount.instantCast then
+        return true
+    end
+
+    local normalizedSpellID = SafeToNumber(spellID)
+    if normalizedSpellID and INSTANT_MOUNT_SPELL_IDS[normalizedSpellID] then
+        return true
+    end
+
+    local castTime = GetMountSpellCastTime(spellID)
+    return castTime == 0
+end
+
+local function IsPlayerMovingNow()
+    if not IsPlayerMoving then
+        return false
+    end
+
+    local ok, isMoving = pcall(IsPlayerMoving)
+    if not ok then
+        return false
+    end
+
+    return not not isMoving
+end
+
+local function BuildInstantCastPool(pool, wantInstant)
+    local filtered = {}
+    for _, spellID in ipairs(pool) do
+        local isInstant = IsInstantCastMount(spellID, GetMountBySpellID(spellID))
+        if isInstant == wantInstant then
+            table.insert(filtered, spellID)
+        end
+    end
+    return filtered
+end
+
+local function SelectMountFromPool(pool)
+    local candidatePool = pool
+
+    if IsPlayerMovingNow() then
+        local instantPool = BuildInstantCastPool(pool, true)
+        if #instantPool > 0 then
+            candidatePool = instantPool
+        end
+    else
+        local castablePool = BuildInstantCastPool(pool, false)
+        if #castablePool > 0 then
+            candidatePool = castablePool
+        end
+    end
+
+    local spellID = candidatePool[math.random(#candidatePool)]
+    return spellID, GetMountBySpellID(spellID)
 end
 
 local function SummonRandomMount()
@@ -1389,9 +1491,7 @@ local function SummonRandomMount()
         return
     end
 
-    -- Pick a random mount from the pool
-    local spellID = pool[math.random(#pool)]
-    local mount = GetMountBySpellID(spellID)
+    local spellID, mount = SelectMountFromPool(pool)
     -- Spell-only mounts (Paladin/Warlock class mounts) are on the combat GCD;
     -- companion, journal, and item mounts bypass the GCD and can be called immediately.
     local isSpellOnlyMount = not mount or (not mount.index and not mount.journalID and not mount.itemID)
@@ -1547,8 +1647,7 @@ bindingFrame:SetScript("PreClick", function(self, button)
         return
     end
 
-    local spellID = pool[math.random(#pool)]
-    local mount = GetMountBySpellID(spellID)
+    local spellID, mount = SelectMountFromPool(pool)
     local mountLine = BuildMountMacroText(spellID, mount)
     if not mountLine then
         self:SetAttribute("macrotext", "")
