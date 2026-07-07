@@ -2585,7 +2585,6 @@ eventFrame:SetScript("OnEvent", function(self, event, arg1, ...)
         -- Restore keybind after loading screens
         RestoreKeybind()
         ScanMounts()
-        SanitizeSavedMountPools()
         wasMountedState = IsMounted and IsMounted() or false
 
     elseif event == "COMPANION_UPDATE" then

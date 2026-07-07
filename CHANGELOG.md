@@ -1,5 +1,11 @@
 ## [Unreleased]
 
+## [1.0.29] - 2026-07-07
+
+### Fixed
+- Stopped re-sanitizing saved ground/flying mount pools on every loading screen (`PLAYER_ENTERING_WORLD`); the TBC Anniversary maintenance patch made the mount collection scan unreliable immediately after zoning, so a saved pick could be pruned as "unknown" if it was transiently missing from that scan. Saved pools are now only sanitized on addon load and on `COMPANION_UPDATE` (when the mount collection actually changes)
+- Added regression coverage for a loading screen where the mount scan briefly omits already-saved mounts
+
 ## [1.0.28] - 2026-05-18
 
 ### Added

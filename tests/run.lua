@@ -688,6 +688,43 @@ run_test("stale mount IDs are pruned before summoning", function()
     assert_equal(state.last_cast_spell_id, 1001, "valid mount should be selected by the secure button")
 end)
 
+run_test("loading screen does not wipe saved pools when the mount scan briefly omits them", function()
+    local state = setup_env({
+        mounts = {
+            { spellID = 1001, name = "Brown Horse", mountType = 0x01 },
+            { spellID = 2001, name = "Gryphon", mountType = 0x02 },
+            { spellID = 3001, name = "Camel", mountType = 0x01 },
+        },
+        db = {
+            groundMounts = { 1001 },
+            flyingMounts = { 2001 },
+        },
+        c_map_enabled = false,
+    })
+
+    local event_frame
+    for _, frame in ipairs(state.frames) do
+        if frame.events["PLAYER_ENTERING_WORLD"] and frame.scripts["OnEvent"] then
+            event_frame = frame
+            break
+        end
+    end
+    assert_true(event_frame ~= nil, "event frame should be registered for PLAYER_ENTERING_WORLD")
+
+    -- Simulate a loading screen where the mount collection API has not finished
+    -- repopulating yet: the companion list briefly reports an unrelated mount
+    -- but omits the two the player already has saved.
+    state.mounts = {
+        { spellID = 3001, name = "Camel", mountType = 0x01 },
+    }
+    event_frame.scripts["OnEvent"](event_frame, "PLAYER_ENTERING_WORLD")
+
+    assert_equal(#OneButtonMountCharDB.groundMounts, 1, "ground pool should survive a transient partial mount scan")
+    assert_equal(OneButtonMountCharDB.groundMounts[1], 1001, "saved ground mount should not be pruned by a loading screen")
+    assert_equal(#OneButtonMountCharDB.flyingMounts, 1, "flying pool should survive a transient partial mount scan")
+    assert_equal(OneButtonMountCharDB.flyingMounts[1], 2001, "saved flying mount should not be pruned by a loading screen")
+end)
+
 run_test("zone-text fallback still allows flying without C_Map", function()
     local state = setup_env({
         mounts = {
