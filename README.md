@@ -9,7 +9,7 @@
 - Supports direct keybind and mouse-chord summoning from the addon settings
 - Stores mount rotations and addon settings per character
 
-Current version: `1.0.29`
+Current version: `1.0.30`
 
 ## Config UI
 
@@ -53,7 +53,7 @@ Release workflow notes are in [`RELEASING.md`](RELEASING.md).
 ## Scope
 
 - Target client: TBC Anniversary Classic
-- TOC interface: `20505`
+- TOC interface: `20506`
 
 ## Star History
 

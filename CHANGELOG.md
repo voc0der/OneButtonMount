@@ -1,5 +1,10 @@
 ## [Unreleased]
 
+## [1.0.30] - 2026-07-07
+
+### Changed
+- Updated the TBC Anniversary TOC interface to `20506` to match the client's move to game version `2.5.6`
+
 ## [1.0.29] - 2026-07-07
 
 ### Fixed
