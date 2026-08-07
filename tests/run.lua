@@ -63,6 +63,7 @@ local function setup_env(opts)
         spellbook_entries = opts.spellbook_entries or {},
         player_spells = opts.player_spells or {},
         is_spell_known_available = opts.is_spell_known_available ~= false,
+        deprecation_fallbacks = opts.deprecation_fallbacks ~= false,
         locale = opts.locale or "enUS",
         run_macro_text_available = opts.run_macro_text_available or false,
         player_class = opts.player_class or nil,
@@ -111,8 +112,14 @@ local function setup_env(opts)
 
     local function new_font_string()
         local font_string = { shown = true }
-        function font_string:SetPoint() end
-        function font_string:ClearAllPoints() end
+        function font_string:SetPoint(...) self.point = { ... } end
+        function font_string:ClearAllPoints() self.point = nil end
+        function font_string:GetPoint()
+            if self.point then
+                return table.unpack(self.point)
+            end
+            return "CENTER", _G.UIParent, "CENTER", 0, 0
+        end
         function font_string:SetText(text) self.text = text end
         function font_string:Show() self.shown = true end
         function font_string:Hide() self.shown = false end
@@ -254,6 +261,10 @@ local function setup_env(opts)
     _G.Enum = {
         MountType = {
             Flying = 1,
+        },
+        SpellBookSpellBank = {
+            Player = 0,
+            Pet = 1,
         },
     }
     _G.OneButtonMountDB = copy_table(opts.db or {})
@@ -504,6 +515,47 @@ local function setup_env(opts)
         GetContainerItemID = _G.GetContainerItemID,
     }
 
+    -- The TBC Anniversary client exposes these under C_Item and C_SpellBook, and
+    -- only defines the bare globals while its loadDeprecationFallbacks CVar is
+    -- on. deprecation_fallbacks = false simulates that CVar being off, so the
+    -- namespaced path is the only way through.
+    if state.deprecation_fallbacks then
+        _G.C_Item = nil
+        _G.C_SpellBook = nil
+    else
+        local spell_bank_player = _G.Enum.SpellBookSpellBank.Player
+        _G.C_Item = {
+            GetItemSpell = _G.GetItemSpell,
+            GetItemInfo = _G.GetItemInfo,
+            GetItemInfoInstant = _G.GetItemInfoInstant,
+            GetItemSubClassInfo = _G.GetItemSubClassInfo,
+            UseItemByName = _G.UseItemByName,
+        }
+        _G.C_SpellBook = {
+            -- Blizzard's shim maps the old IsSpellKnown onto IsSpellInSpellBook.
+            IsSpellInSpellBook = function(spell_id, spell_bank)
+                if spell_bank ~= spell_bank_player then
+                    return false
+                end
+                return state.known_spells[spell_id] or false
+            end,
+            -- ...and the old IsPlayerSpell onto the new IsSpellKnown.
+            IsSpellKnown = function(spell_id, spell_bank)
+                if spell_bank ~= spell_bank_player then
+                    return false
+                end
+                return state.player_spells[spell_id] or false
+            end,
+        }
+        _G.GetItemSpell = nil
+        _G.GetItemInfo = nil
+        _G.GetItemInfoInstant = nil
+        _G.GetItemSubClassInfo = nil
+        _G.UseItemByName = nil
+        _G.IsSpellKnown = nil
+        _G.IsPlayerSpell = nil
+    end
+
     if #state.mount_journal_mounts > 0 then
         local mount_by_id = {}
         local mount_ids = {}
@@ -747,6 +799,299 @@ run_test("zone-text fallback still allows flying without C_Map", function()
     assert_equal(state.last_cast_spell_id, 3001, "flying pool should be selected in Outland")
 end)
 
+run_test("flying rotation defaults to enabled", function()
+    setup_env({
+        mounts = {
+            { spellID = 2011, name = "Ground Mount", mountType = 0x01 },
+        },
+        char_db = {
+            groundMounts = { 2011 },
+            flyingMounts = {},
+        },
+        c_map_enabled = false,
+    })
+
+    assert_equal(OneButtonMountCharDB.useFlyingMounts, true, "flying rotation should default to enabled")
+end)
+
+run_test("flying rotation switched off keeps ground mounts in outland", function()
+    local state = setup_env({
+        mounts = {
+            { spellID = 2012, name = "Ground Mount", mountType = 0x01 },
+            { spellID = 3012, name = "Flying Mount", mountType = 0x02 },
+        },
+        char_db = {
+            groundMounts = { 2012 },
+            flyingMounts = { 3012 },
+            useFlyingMounts = false,
+        },
+        known_spells = {
+            [34090] = true,
+        },
+        c_map_enabled = false,
+        real_zone_text = "Nagrand",
+    })
+
+    trigger_secure_mount(state)
+
+    assert_equal(state.last_cast_spell_id, 2012, "flying rotation off should force the ground pool in Outland")
+end)
+
+run_test("flying rotation switched on still flies in outland", function()
+    local state = setup_env({
+        mounts = {
+            { spellID = 2013, name = "Ground Mount", mountType = 0x01 },
+            { spellID = 3013, name = "Flying Mount", mountType = 0x02 },
+        },
+        char_db = {
+            groundMounts = { 2013 },
+            flyingMounts = { 3013 },
+            useFlyingMounts = true,
+        },
+        known_spells = {
+            [34090] = true,
+        },
+        c_map_enabled = false,
+        real_zone_text = "Nagrand",
+    })
+
+    trigger_secure_mount(state)
+
+    assert_equal(state.last_cast_spell_id, 3013, "flying rotation on should still pick the flying pool")
+end)
+
+run_test("flying rotation switched off with an empty ground pool explains why", function()
+    local state = setup_env({
+        mounts = {
+            { spellID = 3014, name = "Flying Mount", mountType = 0x02 },
+        },
+        char_db = {
+            groundMounts = {},
+            flyingMounts = { 3014 },
+            useFlyingMounts = false,
+        },
+        known_spells = {
+            [34090] = true,
+        },
+        c_map_enabled = false,
+        real_zone_text = "Nagrand",
+    })
+
+    trigger_secure_mount(state)
+
+    assert_equal(state.last_cast_spell_id, nil, "no mount should be summoned")
+    local found_message = false
+    for _, line in ipairs(state.chat) do
+        if string.find(line, "Flying Mount Rotation is off", 1, true) then
+            found_message = true
+            break
+        end
+    end
+    assert_true(found_message, "expected the message to name the flying rotation toggle as the cause")
+end)
+
+run_test("flying rotation switched off with only flying mounts in the ground pool explains why", function()
+    local state = setup_env({
+        mounts = {
+            { spellID = 2017, name = "Flying Mount In Ground Pool", mountType = 0x02 },
+            { spellID = 3017, name = "Flying Mount", mountType = 0x02 },
+        },
+        char_db = {
+            groundMounts = { 2017 },
+            flyingMounts = { 3017 },
+            useFlyingMounts = false,
+        },
+        known_spells = {
+            [34090] = true,
+        },
+        c_map_enabled = false,
+        real_zone_text = "Nagrand",
+    })
+
+    trigger_secure_mount(state)
+
+    assert_equal(state.last_cast_spell_id, nil, "no mount should be summoned")
+    local blamed_crystals = false
+    local found_message = false
+    for _, line in ipairs(state.chat) do
+        if string.find(line, "Qiraji crystals are AQ40-only", 1, true) then
+            blamed_crystals = true
+        end
+        if string.find(line, "Flying Mount Rotation is off", 1, true) then
+            found_message = true
+        end
+    end
+    assert_true(not blamed_crystals, "an unrelated Qiraji crystal message should not be blamed")
+    assert_true(found_message, "expected the message to name the flying rotation toggle as the cause")
+end)
+
+run_test("flying rotation checkbox toggles the saved setting", function()
+    local state = setup_env({
+        mounts = {
+            { spellID = 2015, name = "Ground Mount", mountType = 0x01 },
+            { spellID = 3015, name = "Flying Mount", mountType = 0x02 },
+        },
+        char_db = {
+            groundMounts = { 2015 },
+            flyingMounts = { 3015 },
+        },
+        known_spells = {
+            [34090] = true,
+        },
+        c_map_enabled = false,
+        real_zone_text = "Nagrand",
+    })
+
+    SlashCmdList["ONEBUTTONMOUNT"]("")
+
+    local config_frame = _G.OneButtonMountConfigFrame
+    assert_true(config_frame ~= nil, "config frame not created")
+    assert_true(config_frame.flyingToggle ~= nil, "flying rotation checkbox missing")
+    assert_equal(config_frame.flyingToggle:GetChecked(), true, "flying rotation checkbox should default checked")
+
+    config_frame.flyingToggle:SetChecked(false)
+    config_frame.flyingToggle.scripts["OnClick"](config_frame.flyingToggle)
+
+    assert_equal(OneButtonMountCharDB.useFlyingMounts, false, "unchecking should save the setting")
+
+    trigger_secure_mount(state)
+    assert_equal(state.last_cast_spell_id, 2015, "unchecking should take effect on the next summon")
+
+    config_frame.flyingToggle:SetChecked(true)
+    config_frame.flyingToggle.scripts["OnClick"](config_frame.flyingToggle)
+
+    assert_equal(OneButtonMountCharDB.useFlyingMounts, true, "rechecking should save the setting")
+
+    trigger_secure_mount(state)
+    assert_equal(state.last_cast_spell_id, 3015, "rechecking should restore flying selection")
+end)
+
+run_test("flying rotation header keeps its gutter aligned with the ground header", function()
+    setup_env({
+        mounts = {
+            { spellID = 2016, name = "Ground Mount", mountType = 0x01 },
+        },
+        char_db = {
+            groundMounts = { 2016 },
+            flyingMounts = {},
+        },
+        c_map_enabled = false,
+    })
+
+    SlashCmdList["ONEBUTTONMOUNT"]("")
+
+    local config_frame = _G.OneButtonMountConfigFrame
+    assert_true(config_frame ~= nil, "config frame not created")
+
+    local _, _, _, ground_x = config_frame.groundLabel:GetPoint()
+    local _, _, _, flying_x = config_frame.flyingLabel:GetPoint()
+    assert_equal(flying_x, ground_x, "both rotation headers should share the same indent")
+    assert_true(ground_x > 15, "rotation headers should be indented to leave a checkbox gutter")
+
+    -- The icon box is pulled back by the gutter so it keeps its full width.
+    local _, anchor, _, container_offset = config_frame.groundContainer:GetPoint()
+    assert_equal(anchor, config_frame.groundLabel, "icon box should anchor to its header")
+    assert_equal(ground_x + container_offset, 15, "icon box should still start at the content edge")
+end)
+
+local function setup_pool_layout(count, options)
+    options = options or {}
+    local mounts, ground, flying = {}, {}, {}
+    for i = 1, count do
+        local spell_id = 7000 + i
+        mounts[i] = {
+            spellID = spell_id,
+            name = string.format("Mount %02d", i),
+            mountType = options.flying and 0x02 or 0x01,
+        }
+        if options.flying then
+            flying[#flying + 1] = spell_id
+        else
+            ground[#ground + 1] = spell_id
+        end
+    end
+
+    setup_env({
+        mounts = mounts,
+        char_db = {
+            groundMounts = ground,
+            flyingMounts = flying,
+            useFlyingMounts = options.useFlyingMounts,
+        },
+        c_map_enabled = false,
+    })
+
+    SlashCmdList["ONEBUTTONMOUNT"]("")
+
+    local config_frame = _G.OneButtonMountConfigFrame
+    assert_true(config_frame ~= nil, "config frame not created")
+    return config_frame
+end
+
+local function count_overlapping_icons(container)
+    local seen, overlaps = {}, 0
+    for _, btn in ipairs(container.mountButtons or {}) do
+        local key = tostring(btn.point[4]) .. "," .. tostring(btn.point[5])
+        if seen[key] then
+            overlaps = overlaps + 1
+        end
+        seen[key] = true
+    end
+    return overlaps
+end
+
+run_test("rotation icons wrap onto a second row instead of stacking", function()
+    local config_frame = setup_pool_layout(11)
+    local gc = config_frame.groundContainer
+
+    assert_equal(#gc.mountButtons, 11, "every ground icon should be created")
+    assert_equal(count_overlapping_icons(gc), 0, "no two icons should share a position")
+
+    assert_equal(gc.mountButtons[1].point[4], 4, "first icon should start at the box origin")
+    assert_equal(gc.mountButtons[1].point[5], -4, "first icon should sit on the first row")
+    assert_equal(gc.mountButtons[10].point[4], 364, "tenth icon should finish the first row")
+    assert_equal(gc.mountButtons[10].point[5], -4, "tenth icon should still be on the first row")
+    assert_equal(gc.mountButtons[11].point[4], 4, "eleventh icon should start a new row")
+    assert_equal(gc.mountButtons[11].point[5], -44, "eleventh icon should drop one row height")
+end)
+
+run_test("a rotation row that is exactly full does not reserve an empty row", function()
+    local config_frame = setup_pool_layout(10)
+
+    assert_equal(count_overlapping_icons(config_frame.groundContainer), 0, "ten icons should fit one row")
+    assert_equal(config_frame.groundContainer:GetHeight(), 48, "ten icons should size the box to a single row")
+end)
+
+run_test("large rotations stay free of overlapping icons", function()
+    local config_frame = setup_pool_layout(30)
+    local gc = config_frame.groundContainer
+
+    assert_equal(#gc.mountButtons, 30, "every ground icon should be created")
+    assert_equal(count_overlapping_icons(gc), 0, "no two icons should share a position")
+    assert_equal(gc:GetHeight(), 128, "thirty icons should size the box to three rows")
+end)
+
+run_test("flying rotation icons wrap and keep their dimmed state", function()
+    local config_frame = setup_pool_layout(11, { flying = true, useFlyingMounts = false })
+    local fc = config_frame.flyingContainer
+
+    assert_equal(#fc.mountButtons, 11, "every flying icon should be created")
+    assert_equal(count_overlapping_icons(fc), 0, "no two icons should share a position")
+    assert_equal(fc.mountButtons[11].point[5], -44, "eleventh icon should drop one row height")
+
+    for _, btn in ipairs(fc.mountButtons) do
+        assert_equal(btn.iconTexture.desaturated, true, "flying icons should stay dimmed while the section is off")
+    end
+end)
+
+run_test("rotation icons are not dimmed while the section is enabled", function()
+    local config_frame = setup_pool_layout(11, { flying = true, useFlyingMounts = true })
+
+    for _, btn in ipairs(config_frame.flyingContainer.mountButtons) do
+        assert_equal(btn.iconTexture.desaturated, false, "flying icons should not be dimmed while the section is on")
+    end
+end)
+
 run_test("area-id fallback still allows flying when zone text is unavailable", function()
     local state = setup_env({
         mounts = {
@@ -981,6 +1326,189 @@ run_test("outside aq40 with only qiraji mounts reports no eligible mounts", func
         end
     end
     assert_true(found_message, "expected AQ40-only eligibility message")
+end)
+
+run_test("black qiraji crystal is detected and usable outside aq40", function()
+    local state = setup_env({
+        num_companions_mode = "no_values",
+        in_instance = false,
+        bag_items = { 21176 },
+        item_spells = {
+            [21176] = { name = "Summon Black Qiraji Battle Tank", spellID = 9331 },
+        },
+        item_infos = {
+            -- No item class data: TBC-era clients do not tag crystals as mounts.
+            [21176] = { name = "Black Qiraji Resonating Crystal", icon = "icon" },
+        },
+        db = {
+            groundMounts = { 9331 },
+            flyingMounts = {},
+        },
+        c_map_enabled = false,
+    })
+
+    trigger_secure_mount(state)
+
+    assert_equal(state.last_used_item_id, 21176, "black qiraji crystal should be detected and usable outside AQ40")
+end)
+
+run_test("black qiraji crystal is eligible inside aq40", function()
+    local state = setup_env({
+        num_companions_mode = "no_values",
+        indoors = true,
+        in_instance = true,
+        instance_info = {
+            name = "Temple of Ahn'Qiraj",
+            instanceType = "raid",
+            instanceID = 531,
+        },
+        bag_items = { 21176, 37012 },
+        item_spells = {
+            [21176] = { name = "Summon Black Qiraji Battle Tank", spellID = 9341 },
+            [37012] = { name = "Summon Ground Mount", spellID = 9342 },
+        },
+        item_infos = {
+            [21176] = { name = "Black Qiraji Resonating Crystal", icon = "icon" },
+            [37012] = { name = "Ground Mount Item", icon = "icon", classID = 15, subClassID = 5, itemType = "Miscellaneous", itemSubType = "Mount" },
+        },
+        db = {
+            groundMounts = { 9341, 9342 },
+            flyingMounts = {},
+        },
+        c_map_enabled = false,
+    })
+
+    trigger_secure_mount(state)
+
+    assert_equal(state.last_used_item_id, 21176, "inside AQ40 the black crystal should be the only eligible mount")
+end)
+
+run_test("black qiraji crystal cannot be added to the flying rotation", function()
+    local state = setup_env({
+        num_companions_mode = "no_values",
+        bag_items = { 21176 },
+        item_spells = {
+            [21176] = { name = "Summon Black Qiraji Battle Tank", spellID = 9351 },
+        },
+        item_infos = {
+            [21176] = { name = "Black Qiraji Resonating Crystal", icon = "icon" },
+        },
+        db = {
+            groundMounts = {},
+            flyingMounts = {},
+        },
+        c_map_enabled = false,
+    })
+
+    SlashCmdList["ONEBUTTONMOUNT"]("")
+
+    local config_frame = _G.OneButtonMountConfigFrame
+    assert_true(config_frame ~= nil, "config frame not created")
+
+    local crystal_button
+    for _, button in ipairs(config_frame.mountButtons or {}) do
+        if button.mountData and button.mountData.spellID == 9351 and not button.pool then
+            crystal_button = button
+            break
+        end
+    end
+    assert_true(crystal_button ~= nil, "black qiraji crystal button not found in available list")
+
+    crystal_button.scripts["OnClick"](crystal_button, "RightButton")
+
+    assert_equal(#OneButtonMountCharDB.flyingMounts, 0, "ground-only crystal should not enter flying pool")
+
+    local found_message = false
+    for _, line in ipairs(state.chat) do
+        if string.find(line, "cannot be added to flying rotation", 1, true) then
+            found_message = true
+            break
+        end
+    end
+    assert_true(found_message, "expected flying rotation rejection message")
+end)
+
+run_test("bag mounts are detected and summoned through C_Item when deprecation fallbacks are off", function()
+    local state = setup_env({
+        deprecation_fallbacks = false,
+        num_companions_mode = "no_values",
+        in_instance = false,
+        bag_items = { 21176 },
+        item_spells = {
+            [21176] = { name = "Summon Black Qiraji Battle Tank", spellID = 9361 },
+        },
+        item_infos = {
+            [21176] = { name = "Black Qiraji Resonating Crystal", icon = "icon" },
+        },
+        db = {
+            groundMounts = { 9361 },
+            flyingMounts = {},
+        },
+        c_map_enabled = false,
+    })
+
+    assert_equal(_G.GetItemSpell, nil, "test setup should remove the deprecated GetItemSpell global")
+    assert_equal(_G.UseItemByName, nil, "test setup should remove the deprecated UseItemByName global")
+
+    trigger_secure_mount(state)
+    assert_equal(state.last_used_item_id, 21176, "bag scan should resolve items through C_Item")
+
+    -- Minimap right-click takes the non-secure summon path, which is the only
+    -- caller of UseItemByName.
+    local minimap_button = _G.OneButtonMountMinimapButton
+    assert_true(minimap_button ~= nil, "minimap button not created")
+    state.last_used_item_id = nil
+    minimap_button.scripts["OnClick"](minimap_button, "RightButton")
+    assert_equal(state.last_used_item_id, 21176, "summon should use C_Item.UseItemByName")
+end)
+
+run_test("class mount spells resolve through C_SpellBook when deprecation fallbacks are off", function()
+    local state = setup_env({
+        deprecation_fallbacks = false,
+        mounts = {},
+        known_spells = {
+            [13819] = true, -- Summon Warhorse
+        },
+        spell_infos = {
+            [13819] = { name = "Summon Warhorse", icon = "warhorse" },
+        },
+        db = {
+            groundMounts = { 13819 },
+            flyingMounts = {},
+        },
+        c_map_enabled = false,
+    })
+
+    assert_equal(_G.IsSpellKnown, nil, "test setup should remove the deprecated IsSpellKnown global")
+    assert_equal(_G.IsPlayerSpell, nil, "test setup should remove the deprecated IsPlayerSpell global")
+
+    trigger_secure_mount(state)
+
+    assert_equal(state.last_cast_spell_id, 13819, "class mount should resolve through C_SpellBook.IsSpellInSpellBook")
+end)
+
+run_test("player spell knowledge resolves through C_SpellBook.IsSpellKnown when deprecation fallbacks are off", function()
+    local state = setup_env({
+        deprecation_fallbacks = false,
+        is_spell_known_available = false,
+        mounts = {},
+        known_spells = {},
+        player_spells = {
+            [23214] = true, -- Summon Charger
+        },
+        spell_infos = {
+            [23214] = { name = "Summon Charger", icon = "charger" },
+        },
+        db = {
+            groundMounts = { 23214 },
+            flyingMounts = {},
+        },
+        c_map_enabled = false,
+    })
+
+    trigger_secure_mount(state)
+
+    assert_equal(state.last_cast_spell_id, 23214, "class mount should resolve through C_SpellBook.IsSpellKnown")
 end)
 
 run_test("right mouse keybind maps to BUTTON2 token", function()

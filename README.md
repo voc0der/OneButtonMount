@@ -20,6 +20,7 @@ Current version: `1.0.30`
 - In the available mounts list, left-click adds a mount to Ground
 - In the available mounts list, right-click adds a mount to Flying
 - Click any icon in the Ground or Flying rows to remove that mount
+- Uncheck the box beside `Flying Mount Rotation` to stay on ground mounts, even where you could fly
 - Use `Click to Bind` to capture a keyboard or mouse button combo
 - Example chord: `SHIFT-BUTTON5`
 
