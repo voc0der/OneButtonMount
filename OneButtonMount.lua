@@ -101,11 +101,39 @@ local AQ40_INSTANCE_ID = 531
 local AQ40_ZONE_NAMES = {
     ["Temple of Ahn'Qiraj"] = true,
 }
-local AQ40_CRYSTAL_ITEM_IDS = {
+-- The colored crystals only work inside AQ40. The Black Qiraji Resonating
+-- Crystal is deliberately not listed here: it is the one crystal that works
+-- anywhere in the world, so it must never be AQ40-gated.
+local AQ40_ONLY_ITEM_IDS = {
     [21218] = true, -- Blue Qiraji Resonating Crystal
     [21321] = true, -- Red Qiraji Resonating Crystal
     [21323] = true, -- Green Qiraji Resonating Crystal
     [21324] = true, -- Yellow Qiraji Resonating Crystal
+}
+-- Crystals that still work while inside AQ40, which includes the black one.
+local AQ40_USABLE_ITEM_IDS = {
+    [21176] = true, -- Black Qiraji Resonating Crystal
+}
+for itemID in pairs(AQ40_ONLY_ITEM_IDS) do
+    AQ40_USABLE_ITEM_IDS[itemID] = true
+end
+
+-- Qiraji Resonating Crystals are not tagged with the Miscellaneous/Mount item
+-- class on TBC-era clients, so the bag scan cannot recognize them by item type.
+-- Listing them makes detection explicit and supplies mount data the client
+-- does not report for plain items. Every crystal is a ground mount.
+-- The black crystal is deliberately left unclassified. TBC-era clients report
+-- no mount type for anything else, so marking it ground-only would make it the
+-- single mount in the game that cannot be added to the flying rotation. It is a
+-- normal ground mount and behaves like every other one.
+-- The colored crystals only work inside AQ40, where flying is impossible, so
+-- marking those ground-only costs nothing and keeps them out of that rotation.
+local KNOWN_MOUNT_ITEM_IDS = {
+    [21176] = {},                   -- Black Qiraji Resonating Crystal
+    [21218] = { isFlying = false }, -- Blue Qiraji Resonating Crystal
+    [21321] = { isFlying = false }, -- Red Qiraji Resonating Crystal
+    [21323] = { isFlying = false }, -- Green Qiraji Resonating Crystal
+    [21324] = { isFlying = false }, -- Yellow Qiraji Resonating Crystal
 }
 
 -- ============================================================================
@@ -118,6 +146,111 @@ local allMounts = {}        -- { spellID, name, icon, isFlying, canDetermineFlyi
 local savedAuraBeforeMount = nil
 local wasMountedState = false
 local mountingInProgress = false
+
+-- ============================================================================
+-- Client API Compatibility
+-- ============================================================================
+-- TBC Anniversary moved these item and spellbook functions into the C_Item and
+-- C_SpellBook namespaces. The bare globals still resolve, but only because the
+-- client loads backwards-compatibility shims, and it only loads those while its
+-- `loadDeprecationFallbacks` CVar is enabled. Blizzard's own TOC note says they
+-- are removed at the next expansion. Prefer the namespaced call and keep the
+-- global as a fallback for older clients.
+
+local function GetPlayerSpellBank()
+    return Enum and Enum.SpellBookSpellBank and Enum.SpellBookSpellBank.Player
+end
+
+local function APIGetItemSpell(itemID)
+    if C_Item and C_Item.GetItemSpell then
+        return C_Item.GetItemSpell(itemID)
+    elseif GetItemSpell then
+        return GetItemSpell(itemID)
+    end
+    return nil
+end
+
+local function APIHasItemSpell()
+    return (C_Item and C_Item.GetItemSpell) or GetItemSpell
+end
+
+local function APIGetItemInfo(itemID)
+    if C_Item and C_Item.GetItemInfo then
+        return C_Item.GetItemInfo(itemID)
+    elseif GetItemInfo then
+        return GetItemInfo(itemID)
+    end
+    return nil
+end
+
+local function APIHasItemInfo()
+    return (C_Item and C_Item.GetItemInfo) or GetItemInfo
+end
+
+local function APIGetItemInfoInstant(itemID)
+    if C_Item and C_Item.GetItemInfoInstant then
+        return C_Item.GetItemInfoInstant(itemID)
+    elseif GetItemInfoInstant then
+        return GetItemInfoInstant(itemID)
+    end
+    return nil
+end
+
+local function APIHasItemInfoInstant()
+    return (C_Item and C_Item.GetItemInfoInstant) or GetItemInfoInstant
+end
+
+local function APIGetItemSubClassInfo(classID, subClassID)
+    if C_Item and C_Item.GetItemSubClassInfo then
+        return C_Item.GetItemSubClassInfo(classID, subClassID)
+    elseif GetItemSubClassInfo then
+        return GetItemSubClassInfo(classID, subClassID)
+    end
+    return nil
+end
+
+local function APIHasItemSubClassInfo()
+    return (C_Item and C_Item.GetItemSubClassInfo) or GetItemSubClassInfo
+end
+
+local function APIUseItemByName(itemID)
+    if C_Item and C_Item.UseItemByName then
+        return C_Item.UseItemByName(itemID)
+    elseif UseItemByName then
+        return UseItemByName(itemID)
+    end
+    return nil
+end
+
+local function APIHasUseItemByName()
+    return (C_Item and C_Item.UseItemByName) or UseItemByName
+end
+
+-- Blizzard's own shim maps the two spellbook globals onto C_SpellBook with the
+-- names crossed over: IsSpellKnown -> IsSpellInSpellBook, and the newer
+-- C_SpellBook.IsSpellKnown is what backs the old IsPlayerSpell.
+local function APIIsSpellKnown(spellID)
+    if C_SpellBook and C_SpellBook.IsSpellInSpellBook then
+        return C_SpellBook.IsSpellInSpellBook(spellID, GetPlayerSpellBank(), false)
+    elseif IsSpellKnown then
+        return IsSpellKnown(spellID)
+    end
+    return nil
+end
+
+local function APIIsPlayerSpell(spellID)
+    if C_SpellBook and C_SpellBook.IsSpellKnown then
+        return C_SpellBook.IsSpellKnown(spellID, GetPlayerSpellBank())
+    elseif IsPlayerSpell then
+        return IsPlayerSpell(spellID)
+    end
+    return nil
+end
+
+local function APIHasSpellKnowledge()
+    return (C_SpellBook and (C_SpellBook.IsSpellInSpellBook or C_SpellBook.IsSpellKnown))
+        or IsSpellKnown or IsPlayerSpell or GetNumSpellTabs
+end
 
 -- ============================================================================
 -- Utility
@@ -143,6 +276,22 @@ local function Feedback(msg)
     if ShowTextualFeedback() then
         Print(msg)
     end
+end
+
+-- Players can switch the flying rotation off to stay on ground mounts, for
+-- example to match a group that has not unlocked flying yet. Defaults to on.
+local function UseFlyingMounts()
+    local characterDB = GetCharacterDB()
+    if characterDB.useFlyingMounts == nil then
+        return true
+    end
+
+    return characterDB.useFlyingMounts
+end
+
+local function SetUseFlyingMounts(enabled)
+    local characterDB = GetCharacterDB()
+    characterDB.useFlyingMounts = enabled and true or false
 end
 
 local function TableContains(tbl, value)
@@ -370,11 +519,11 @@ local function ResolvePlayerSpellID(spellID, fallbackName)
         return nil
     end
 
-    if IsSpellKnown and IsSpellKnown(normalizedSpellID) then
+    if APIIsSpellKnown(normalizedSpellID) then
         return normalizedSpellID
     end
 
-    if IsPlayerSpell and IsPlayerSpell(normalizedSpellID) then
+    if APIIsPlayerSpell(normalizedSpellID) then
         return normalizedSpellID
     end
 
@@ -391,7 +540,7 @@ local function GetFlyingRidingSkillDetails()
         playerLevel = SafeToNumber(UnitLevel("player"))
     end
 
-    local hasSpellKnowledgeAPI = IsSpellKnown or IsPlayerSpell or GetNumSpellTabs
+    local hasSpellKnowledgeAPI = APIHasSpellKnowledge()
     local hasExpert = false
     local hasArtisan = false
 
@@ -682,6 +831,10 @@ local function ScanMounts()
             return false
         end
 
+        if KNOWN_MOUNT_ITEM_IDS[itemID] then
+            return true
+        end
+
         local miscClassID = LE_ITEM_CLASS_MISCELLANEOUS or 15
         local mountSubClassID = LE_ITEM_MISCELLANEOUS_MOUNT or 5
 
@@ -693,8 +846,8 @@ local function ScanMounts()
         end
 
         local classID, subClassID
-        if GetItemInfoInstant then
-            local _, _, _, _, _, cID, sID = GetItemInfoInstant(itemID)
+        if APIHasItemInfoInstant() then
+            local _, _, _, _, _, cID, sID = APIGetItemInfoInstant(itemID)
             classID, subClassID = SafeToNumber(cID), SafeToNumber(sID)
         end
 
@@ -704,9 +857,9 @@ local function ScanMounts()
             end
         end
 
-        if GetItemInfo and GetItemSubClassInfo then
-            local _, _, _, _, _, itemType, itemSubType = GetItemInfo(itemID)
-            local mountSubType = GetItemSubClassInfo(miscClassID, mountSubClassID)
+        if APIHasItemInfo() and APIHasItemSubClassInfo() then
+            local _, _, _, _, _, itemType, itemSubType = APIGetItemInfo(itemID)
+            local mountSubType = APIGetItemSubClassInfo(miscClassID, mountSubClassID)
             if itemSubType and mountSubType and itemSubType == mountSubType then
                 return true
             end
@@ -810,17 +963,26 @@ local function ScanMounts()
     end
 
     -- TBC-style fallback: scan bag items that are mount items.
-    if GetItemSpell then
+    if APIHasItemSpell() then
         local maxBag = SafeToNumber(NUM_BAG_SLOTS) or 4
         for bag = 0, maxBag do
             local slotCount = GetBagSlotCount(bag)
             for slot = 1, slotCount do
                 local itemID = GetBagItemID(bag, slot)
                 if itemID and IsMountItem(itemID) then
-                    local spellName, spellID = GetItemSpell(itemID)
+                    local spellName, spellID = APIGetItemSpell(itemID)
                     if spellID then
-                        local itemName, _, _, _, _, _, _, _, _, itemIcon = GetItemInfo(itemID)
-                        AddMountEntry(spellID, itemName or spellName, itemIcon, true, false, nil, nil, itemID)
+                        local itemName, _, _, _, _, _, _, _, _, itemIcon = APIGetItemInfo(itemID)
+                        -- Item mounts report no mount type, so assume flying is
+                        -- possible unless the item is one we have data for.
+                        local knownMount = KNOWN_MOUNT_ITEM_IDS[itemID]
+                        local isFlying = true
+                        local canDetermineFlying = false
+                        if knownMount and knownMount.isFlying ~= nil then
+                            isFlying = knownMount.isFlying
+                            canDetermineFlying = true
+                        end
+                        AddMountEntry(spellID, itemName or spellName, itemIcon, isFlying, canDetermineFlying, nil, nil, itemID)
                     end
                 end
             end
@@ -829,7 +991,7 @@ local function ScanMounts()
 
     -- Paladin and warlock class mounts are cast directly and do not always
     -- appear in companion, journal, or bag-based mount lists.
-    if IsSpellKnown or IsPlayerSpell or GetNumSpellTabs then
+    if APIHasSpellKnowledge() then
         for _, spellMount in ipairs(SPELL_MOUNT_SPELLS) do
             local resolvedSpellID = ResolvePlayerSpellID(spellMount.spellID, spellMount.name)
             if resolvedSpellID then
@@ -870,6 +1032,11 @@ local function GetFlyableAreaSignal()
 end
 
 local function CanFlyHere()
+    -- An explicit player choice outranks every location signal below.
+    if not UseFlyingMounts() then
+        return false
+    end
+
     -- Must be outdoors and not in an instance
     if IsIndoors() then
         return false
@@ -906,6 +1073,17 @@ local function GetMountBySpellID(spellID)
     return nil
 end
 
+-- A mount the client positively reports as ground-only. Mounts whose type the
+-- client never reports stay unclassified and remain valid for either rotation,
+-- which on TBC-era clients is most of them.
+local function IsGroundOnlyMount(mount)
+    if not mount then
+        return false
+    end
+
+    return mount.canDetermineFlying and not mount.isFlying
+end
+
 local function IsInAQ40()
     local localizedAQ40ZoneNames = BuildAQ40ZoneNameSet()
 
@@ -932,26 +1110,46 @@ local function IsInAQ40()
     return false
 end
 
-local function IsAQ40CrystalMount(mount)
+-- Mounts that only work inside AQ40 and are unusable everywhere else.
+local function IsAQ40OnlyMount(mount)
     if not mount then
         return false
     end
 
-    if mount.itemID and AQ40_CRYSTAL_ITEM_IDS[mount.itemID] then
+    if mount.itemID and AQ40_ONLY_ITEM_IDS[mount.itemID] then
         return true
     end
 
     return false
 end
 
-local function FilterEligibleSpellIDs(sourcePool, includeAQ40Crystals, canFlyHere)
+-- Mounts that still work while inside AQ40, where normal mounts are blocked.
+local function IsAQ40UsableMount(mount)
+    if not mount then
+        return false
+    end
+
+    if mount.itemID and AQ40_USABLE_ITEM_IDS[mount.itemID] then
+        return true
+    end
+
+    return false
+end
+
+local function FilterEligibleSpellIDs(sourcePool, inAQ40, canFlyHere)
     local filtered = {}
     for _, spellID in ipairs(sourcePool) do
         local mount = GetMountBySpellID(spellID)
         if mount then
-            local isAQ40Crystal = IsAQ40CrystalMount(mount)
+            local isUsableHere
+            if inAQ40 then
+                isUsableHere = IsAQ40UsableMount(mount)
+            else
+                isUsableHere = not IsAQ40OnlyMount(mount)
+            end
+
             local isUsableFlyingMount = not mount.canDetermineFlying or not mount.isFlying or canFlyHere
-            if includeAQ40Crystals == isAQ40Crystal and isUsableFlyingMount then
+            if isUsableHere and isUsableFlyingMount then
                 table.insert(filtered, spellID)
             end
         end
@@ -1005,6 +1203,13 @@ local function BuildEligibleMountPool()
         if #secondaryEligible > 0 then
             return secondaryEligible, nil
         end
+    end
+
+    -- Reached only once nothing in the ground pool was eligible. Covers both an
+    -- empty ground pool and one that holds nothing but flying mounts, either of
+    -- which is otherwise reported as the unrelated Qiraji crystal message.
+    if not UseFlyingMounts() and #flyingMounts > 0 then
+        return nil, "Flying Mount Rotation is off. Add a ground mount, or re-enable it in the config."
     end
 
     if #groundMounts == 0 and #flyingMounts == 0 then
@@ -1168,6 +1373,7 @@ local function PrintDebugSummary()
         DebugLabel("ride") .. "=" .. DebugValue(riding.ridingLabel) .. "@lvl" .. DebugValue(riding.level),
         DebugLabel("flyable") .. "=" .. flyableSummary,
         DebugLabel("canFly") .. "=" .. DebugBool(canFlyHere),
+        DebugLabel("useFly") .. "=" .. DebugBool(UseFlyingMounts()),
         DebugLabel("pools") .. "=G" .. tostring(#groundMounts) .. "/F" .. tostring(#flyingMounts) .. "/all" .. tostring(#allMounts),
         DebugLabel("eligible") .. "=G" .. tostring(#eligibleGround) .. "/F" .. tostring(#eligibleFlying),
         DebugLabel("pick") .. "=" .. DebugValue(pickLabel),
@@ -1530,8 +1736,8 @@ local function SummonRandomMount()
             C_MountJournal.SummonByID(mount.journalID)
         elseif mount.index and CallCompanion then
             CallCompanion("MOUNT", mount.index)
-        elseif mount.itemID and UseItemByName then
-            UseItemByName(mount.itemID)
+        elseif mount.itemID and APIHasUseItemByName() then
+            APIUseItemByName(mount.itemID)
         else
             if CastSpellByID then
                 CastSpellByID(spellID)
@@ -1817,6 +2023,22 @@ end
 local POOL_GROUND = "ground"
 local POOL_FLYING = "flying"
 
+-- Rotation headers are indented by a gutter that holds the section checkbox.
+local POOL_SECTION_X = 15
+local POOL_SECTION_GUTTER = 28
+
+-- Icon grid geometry, shared by the rotation rows and the available list.
+local POOL_ICON_ORIGIN = 4  -- inset of the first icon inside its box
+local POOL_ICON_STRIDE = 40 -- 36px icon plus the gap to the next one
+
+local function GetIconGridColumns(width)
+    local columns = math.floor(((width or 0) - POOL_ICON_ORIGIN) / POOL_ICON_STRIDE)
+    if columns < 1 then
+        columns = 1
+    end
+    return columns
+end
+
 local function UpdateCrusaderAuraDisableDropdown()
     if not configFrame or not configFrame.crusaderAuraDisableDropdown then
         return
@@ -1894,7 +2116,13 @@ local function CreateMountIcon(parent, mountData, pool, index)
             GameTooltip:AddLine("Click to remove", 0.8, 0.2, 0.2)
         else
             GameTooltip:AddLine("Left-click to add to Ground pool", 0.2, 0.8, 0.2)
-            GameTooltip:AddLine("Right-click to add to Flying pool", 0.4, 0.6, 1.0)
+            -- Only offer the flying pool when the mount can actually go there,
+            -- so the tooltip never invites a click that gets refused.
+            if IsGroundOnlyMount(self.mountData) then
+                GameTooltip:AddLine("Ground-only mount", 0.7, 0.7, 0.7)
+            else
+                GameTooltip:AddLine("Right-click to add to Flying pool", 0.4, 0.6, 1.0)
+            end
         end
         GameTooltip:Show()
     end)
@@ -1922,8 +2150,9 @@ local function CreateMountIcon(parent, mountData, pool, index)
                     table.insert(characterDB.groundMounts, self.mountData.spellID)
                 end
             elseif button == "RightButton" then
-                if self.mountData.canDetermineFlying and not self.mountData.isFlying then
-                    Feedback((self.mountData.name or "This mount") .. " cannot be added to flying rotation.")
+                if IsGroundOnlyMount(self.mountData) then
+                    Feedback((self.mountData.name or "This mount")
+                        .. " is a ground-only mount, so it can only be added to the ground rotation.")
                     return
                 end
                 if not TableContains(characterDB.flyingMounts, self.mountData.spellID) then
@@ -1937,13 +2166,16 @@ local function CreateMountIcon(parent, mountData, pool, index)
     return btn
 end
 
-local function CreatePoolSection(parent, title, pool, yOffset)
+local function CreatePoolSection(parent, title, pool, yOffset, toggleTooltip)
     local label = parent:CreateFontString(nil, "OVERLAY", "GameFontNormalLarge")
-    label:SetPoint("TOPLEFT", parent, "TOPLEFT", 15, yOffset)
+    label:SetPoint("TOPLEFT", parent, "TOPLEFT", POOL_SECTION_X + POOL_SECTION_GUTTER, yOffset)
     label:SetText(title)
 
+    -- Both rotation headers carry the gutter so they stay aligned with each
+    -- other; only the flying section fills it with a checkbox. The container is
+    -- pulled back by the gutter so the icon box keeps its full width.
     local container = CreateFrame("Frame", nil, parent)
-    container:SetPoint("TOPLEFT", label, "BOTTOMLEFT", 0, -8)
+    container:SetPoint("TOPLEFT", label, "BOTTOMLEFT", -POOL_SECTION_GUTTER, -8)
     container:SetSize(430, 44) -- explicit width avoids 0-width on first render
 
     local bg = container:CreateTexture(nil, "BACKGROUND")
@@ -1958,7 +2190,26 @@ local function CreatePoolSection(parent, title, pool, yOffset)
     container.mountButtons = {}
     container.pool = pool
 
-    return container, label
+    -- Anchored to the label so it follows every reposition in RefreshConfigUI.
+    local toggle = nil
+    if toggleTooltip then
+        toggle = CreateFrame("CheckButton", nil, parent, "UICheckButtonTemplate")
+        toggle:SetSize(24, 24)
+        toggle:SetPoint("RIGHT", label, "LEFT", -4, 0)
+        ApplyElvUISkin(toggle, "checkbox")
+
+        toggle:SetScript("OnEnter", function(self)
+            GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
+            GameTooltip:SetText(title, 1, 1, 1)
+            GameTooltip:AddLine(toggleTooltip, 0.8, 0.8, 0.8, true)
+            GameTooltip:Show()
+        end)
+        toggle:SetScript("OnLeave", function(self)
+            GameTooltip:Hide()
+        end)
+    end
+
+    return container, label, toggle
 end
 
 function OneButtonMount:CreateConfigUI()
@@ -2240,9 +2491,24 @@ function OneButtonMount:CreateConfigUI()
     -- ========================================================================
     -- Flying Mount Pool
     -- ========================================================================
-    local flyingContainer, flyingLabel = CreatePoolSection(configFrame, "Flying Mount Rotation", POOL_FLYING, yOffset)
+    local flyingContainer, flyingLabel, flyingToggle = CreatePoolSection(
+        configFrame,
+        "Flying Mount Rotation",
+        POOL_FLYING,
+        yOffset,
+        "Uncheck to stay on ground mounts, for example to match a group that has not unlocked flying yet."
+    )
     configFrame.flyingContainer = flyingContainer
     configFrame.flyingLabel = flyingLabel
+    configFrame.flyingToggle = flyingToggle
+
+    if flyingToggle then
+        flyingToggle:SetChecked(UseFlyingMounts())
+        flyingToggle:SetScript("OnClick", function(self)
+            SetUseFlyingMounts(self:GetChecked())
+            OneButtonMount:RefreshConfigUI()
+        end)
+    end
 
     yOffset = yOffset - 80
 
@@ -2277,6 +2543,51 @@ function OneButtonMount:CreateConfigUI()
     self:RefreshConfigUI()
 end
 
+-- Rebuilds one rotation's icons as a wrapped grid and sizes its box to fit.
+-- The row height is derived from the icons actually placed, so a pool that
+-- exactly fills its last row does not reserve an empty one below it.
+local function LayoutPoolIcons(container, pool, poolType, dimmed)
+    for _, btn in ipairs(container.mountButtons or {}) do
+        btn:Hide()
+        btn:SetParent(nil)
+    end
+    container.mountButtons = {}
+
+    if #pool == 0 then
+        container.emptyText:Show()
+    else
+        container.emptyText:Hide()
+    end
+
+    local maxColumns = GetIconGridColumns(container:GetWidth())
+    local placed = 0
+
+    for index, spellID in ipairs(pool) do
+        local mount = GetMountBySpellID(spellID)
+        if mount then
+            local column = placed % maxColumns
+            local row = math.floor(placed / maxColumns)
+
+            local btn = CreateMountIcon(container, mount, poolType, index)
+            btn:SetPoint(
+                "TOPLEFT",
+                container,
+                "TOPLEFT",
+                POOL_ICON_ORIGIN + column * POOL_ICON_STRIDE,
+                -POOL_ICON_ORIGIN - row * POOL_ICON_STRIDE
+            )
+            btn.iconTexture:SetDesaturated(dimmed)
+            btn.iconTexture:SetAlpha(dimmed and 0.5 or 1)
+
+            table.insert(container.mountButtons, btn)
+            placed = placed + 1
+        end
+    end
+
+    local rows = math.max(1, math.ceil(placed / maxColumns))
+    container:SetHeight(math.max(44, rows * POOL_ICON_STRIDE + 8))
+end
+
 function OneButtonMount:RefreshConfigUI()
     if not configFrame then return end
 
@@ -2288,6 +2599,9 @@ function OneButtonMount:RefreshConfigUI()
     end
     if configFrame.textualFeedbackCheckbox then
         configFrame.textualFeedbackCheckbox:SetChecked(ShowTextualFeedback())
+    end
+    if configFrame.flyingToggle then
+        configFrame.flyingToggle:SetChecked(UseFlyingMounts())
     end
     if configFrame.crusaderAuraCheckbox then
         local crusaderAuraEnabled = GetCrusaderAuraFeatureEnabled()
@@ -2306,80 +2620,24 @@ function OneButtonMount:RefreshConfigUI()
         end
     end
 
-    -- Refresh ground pool
     local gc = configFrame.groundContainer
-    for _, btn in ipairs(gc.mountButtons or {}) do
-        btn:Hide()
-        btn:SetParent(nil)
-    end
-    gc.mountButtons = {}
-
+    local fc = configFrame.flyingContainer
     local groundMounts, flyingMounts = GetMountPools()
 
-    if #groundMounts == 0 then
-        gc.emptyText:Show()
-    else
-        gc.emptyText:Hide()
-    end
-
-    local xOff = 4
-    local rowHeight = 40
-    local rows = 1
-    for i, spellID in ipairs(groundMounts) do
-        local mount = GetMountBySpellID(spellID)
-        if mount then
-            local btn = CreateMountIcon(gc, mount, POOL_GROUND, i)
-            btn:SetPoint("TOPLEFT", gc, "TOPLEFT", xOff, -4)
-            xOff = xOff + 40
-            if xOff > gc:GetWidth() - 40 then
-                xOff = 4
-                rows = rows + 1
-            end
-            table.insert(gc.mountButtons, btn)
-        end
-    end
-    gc:SetHeight(math.max(44, rows * rowHeight + 8))
-
-    -- Refresh flying pool
-    local fc = configFrame.flyingContainer
-    for _, btn in ipairs(fc.mountButtons or {}) do
-        btn:Hide()
-        btn:SetParent(nil)
-    end
-    fc.mountButtons = {}
-
-    if #flyingMounts == 0 then
-        fc.emptyText:Show()
-    else
-        fc.emptyText:Hide()
-    end
-
-    xOff = 4
-    rows = 1
-    for i, spellID in ipairs(flyingMounts) do
-        local mount = GetMountBySpellID(spellID)
-        if mount then
-            local btn = CreateMountIcon(fc, mount, POOL_FLYING, i)
-            btn:SetPoint("TOPLEFT", fc, "TOPLEFT", xOff, -4)
-            xOff = xOff + 40
-            if xOff > fc:GetWidth() - 40 then
-                xOff = 4
-                rows = rows + 1
-            end
-            table.insert(fc.mountButtons, btn)
-        end
-    end
-    fc:SetHeight(math.max(44, rows * rowHeight + 8))
+    LayoutPoolIcons(gc, groundMounts, POOL_GROUND, false)
+    -- Flying icons are dimmed while the section is switched off, matching how
+    -- the available list marks mounts that are already spoken for.
+    LayoutPoolIcons(fc, flyingMounts, POOL_FLYING, not UseFlyingMounts())
 
     -- Reposition sections based on dynamic heights
     local yOffset = configFrame.poolsStartOffset or (-35 - 35 - 35)
 
     configFrame.groundLabel:ClearAllPoints()
-    configFrame.groundLabel:SetPoint("TOPLEFT", configFrame, "TOPLEFT", 15, yOffset)
+    configFrame.groundLabel:SetPoint("TOPLEFT", configFrame, "TOPLEFT", POOL_SECTION_X + POOL_SECTION_GUTTER, yOffset)
     yOffset = yOffset - 20 - gc:GetHeight() - 10
 
     configFrame.flyingLabel:ClearAllPoints()
-    configFrame.flyingLabel:SetPoint("TOPLEFT", configFrame, "TOPLEFT", 15, yOffset)
+    configFrame.flyingLabel:SetPoint("TOPLEFT", configFrame, "TOPLEFT", POOL_SECTION_X + POOL_SECTION_GUTTER, yOffset)
     yOffset = yOffset - 20 - fc:GetHeight() - 10
 
     configFrame.availLabel:ClearAllPoints()
@@ -2393,12 +2651,12 @@ function OneButtonMount:RefreshConfigUI()
     end
     configFrame.mountButtons = {}
 
-    xOff = 4
-    local yPos = -4
+    local xOff = POOL_ICON_ORIGIN
+    local yPos = -POOL_ICON_ORIGIN
     local cols = 0
     local frameWidth = configFrame:GetWidth()
     if frameWidth < 1 then frameWidth = 460 end -- fallback if frame not yet laid out
-    local maxCols = math.floor((frameWidth - 50) / 40)
+    local maxCols = GetIconGridColumns(frameWidth - 50)
 
     for _, mount in ipairs(allMounts) do
         local inGround = TableContains(groundMounts, mount.spellID)
@@ -2430,17 +2688,17 @@ function OneButtonMount:RefreshConfigUI()
         table.insert(configFrame.mountButtons, btn)
 
         cols = cols + 1
-        xOff = xOff + 40
+        xOff = xOff + POOL_ICON_STRIDE
         if cols >= maxCols then
             cols = 0
-            xOff = 4
-            yPos = yPos - 40
+            xOff = POOL_ICON_ORIGIN
+            yPos = yPos - POOL_ICON_STRIDE
         end
     end
 
     -- Set scroll child height
-    local totalRows = math.ceil(#allMounts / math.max(maxCols, 1))
-    sc:SetSize(frameWidth - 50, math.max(totalRows * 40 + 10, 100))
+    local totalRows = math.ceil(#allMounts / maxCols)
+    sc:SetSize(frameWidth - 50, math.max(totalRows * POOL_ICON_STRIDE + 10, 100))
 end
 
 function OneButtonMount:ToggleConfigUI()
@@ -2513,6 +2771,9 @@ function OneButtonMount:InitDB()
     GetMinimapSettings()
     if characterDB.showTextualFeedback == nil then
         characterDB.showTextualFeedback = true
+    end
+    if characterDB.useFlyingMounts == nil then
+        characterDB.useFlyingMounts = true
     end
     characterDB.crusaderAuraDisableMode = NormalizeCrusaderAuraDisableMode(characterDB.crusaderAuraDisableMode)
     characterDB.profileVersion = CHARACTER_PROFILE_VERSION
