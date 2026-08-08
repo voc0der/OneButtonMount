@@ -216,8 +216,13 @@ local function setup_env(opts)
 
     _G.GameTooltip = {
         SetOwner = function() end,
-        SetText = function() end,
-        AddLine = function() end,
+        SetText = function(_, text)
+            state.tooltip_lines = { text }
+        end,
+        AddLine = function(_, text)
+            state.tooltip_lines = state.tooltip_lines or {}
+            state.tooltip_lines[#state.tooltip_lines + 1] = text
+        end,
         Show = function() end,
         Hide = function() end,
     }
@@ -1383,7 +1388,7 @@ run_test("black qiraji crystal is eligible inside aq40", function()
     assert_equal(state.last_used_item_id, 21176, "inside AQ40 the black crystal should be the only eligible mount")
 end)
 
-run_test("black qiraji crystal cannot be added to the flying rotation", function()
+run_test("black qiraji crystal can be added to the flying rotation like any other mount", function()
     local state = setup_env({
         num_companions_mode = "no_values",
         bag_items = { 21176 },
@@ -1416,11 +1421,56 @@ run_test("black qiraji crystal cannot be added to the flying rotation", function
 
     crystal_button.scripts["OnClick"](crystal_button, "RightButton")
 
-    assert_equal(#OneButtonMountCharDB.flyingMounts, 0, "ground-only crystal should not enter flying pool")
+    -- The client reports no mount type for anything else, so classifying the
+    -- black crystal would make it the only mount that cannot go here.
+    assert_equal(#OneButtonMountCharDB.flyingMounts, 1, "black crystal should be allowed into the flying pool")
+    assert_equal(OneButtonMountCharDB.flyingMounts[1], 9351, "expected the black crystal spellID in the flying pool")
+
+    for _, line in ipairs(state.chat) do
+        assert_true(not string.find(line, "ground-only mount", 1, true),
+            "the black crystal should not be refused")
+    end
+end)
+
+run_test("aq40-only crystals stay out of the flying rotation", function()
+    local state = setup_env({
+        num_companions_mode = "no_values",
+        bag_items = { 21218 },
+        item_spells = {
+            [21218] = { name = "Summon Blue Qiraji Battle Tank", spellID = 9381 },
+        },
+        item_infos = {
+            [21218] = { name = "Blue Qiraji Resonating Crystal", icon = "icon" },
+        },
+        db = {
+            groundMounts = {},
+            flyingMounts = {},
+        },
+        c_map_enabled = false,
+    })
+
+    SlashCmdList["ONEBUTTONMOUNT"]("")
+
+    local config_frame = _G.OneButtonMountConfigFrame
+    assert_true(config_frame ~= nil, "config frame not created")
+
+    local crystal_button
+    for _, button in ipairs(config_frame.mountButtons or {}) do
+        if button.mountData and button.mountData.spellID == 9381 and not button.pool then
+            crystal_button = button
+            break
+        end
+    end
+    assert_true(crystal_button ~= nil, "blue qiraji crystal button not found in available list")
+
+    crystal_button.scripts["OnClick"](crystal_button, "RightButton")
+
+    -- AQ40 is indoors, so a colored crystal can never be used for flying anyway.
+    assert_equal(#OneButtonMountCharDB.flyingMounts, 0, "AQ40-only crystal should not enter flying pool")
 
     local found_message = false
     for _, line in ipairs(state.chat) do
-        if string.find(line, "cannot be added to flying rotation", 1, true) then
+        if string.find(line, "ground-only mount, so it can only be added to the ground rotation", 1, true) then
             found_message = true
             break
         end
@@ -2215,12 +2265,117 @@ run_test("non-flying mounts cannot be added to flying rotation", function()
 
     local found_message = false
     for _, line in ipairs(state.chat) do
-        if string.find(line, "cannot be added to flying rotation", 1, true) then
+        if string.find(line, "ground-only mount, so it can only be added to the ground rotation", 1, true) then
             found_message = true
             break
         end
     end
     assert_true(found_message, "expected rejection message was not printed")
+end)
+
+local function tooltip_for_available_mount(state, spell_id)
+    local config_frame = _G.OneButtonMountConfigFrame
+    assert_true(config_frame ~= nil, "config frame not created")
+
+    local button
+    for _, candidate in ipairs(config_frame.mountButtons or {}) do
+        if candidate.mountData and candidate.mountData.spellID == spell_id and not candidate.pool then
+            button = candidate
+            break
+        end
+    end
+    assert_true(button ~= nil, "available mount button not found for spellID " .. tostring(spell_id))
+
+    state.tooltip_lines = nil
+    button.scripts["OnEnter"](button)
+    return state.tooltip_lines or {}
+end
+
+local function tooltip_contains(lines, needle)
+    for _, line in ipairs(lines) do
+        if type(line) == "string" and string.find(line, needle, 1, true) then
+            return true
+        end
+    end
+    return false
+end
+
+run_test("ground-only mounts do not advertise the flying pool in their tooltip", function()
+    local state = setup_env({
+        mounts = {
+            { spellID = 5101, name = "Ground Only", mountType = 0x01 },
+        },
+        db = {},
+    })
+
+    SlashCmdList["ONEBUTTONMOUNT"]("")
+    local lines = tooltip_for_available_mount(state, 5101)
+
+    assert_true(tooltip_contains(lines, "Ground-only mount"), "expected the ground-only note")
+    assert_true(not tooltip_contains(lines, "Right-click to add to Flying pool"),
+        "tooltip should not offer a click that gets refused")
+    assert_true(tooltip_contains(lines, "Left-click to add to Ground pool"), "ground pool hint should remain")
+end)
+
+run_test("mounts of unknown type still advertise the flying pool in their tooltip", function()
+    local state = setup_env({
+        mounts = {
+            { spellID = 5102, name = "Unknown Type Mount", mountType = 0 },
+        },
+        db = {},
+    })
+
+    SlashCmdList["ONEBUTTONMOUNT"]("")
+    local lines = tooltip_for_available_mount(state, 5102)
+
+    assert_true(tooltip_contains(lines, "Right-click to add to Flying pool"),
+        "unclassified mounts should still offer the flying pool")
+    assert_true(not tooltip_contains(lines, "Ground-only mount"), "unclassified mounts are not ground-only")
+end)
+
+run_test("the black qiraji crystal advertises both pools like any other mount", function()
+    local state = setup_env({
+        num_companions_mode = "no_values",
+        bag_items = { 21176 },
+        item_spells = {
+            [21176] = { name = "Summon Black Qiraji Battle Tank", spellID = 9371 },
+        },
+        item_infos = {
+            [21176] = { name = "Black Qiraji Resonating Crystal", icon = "icon" },
+        },
+        db = {},
+        c_map_enabled = false,
+    })
+
+    SlashCmdList["ONEBUTTONMOUNT"]("")
+    local lines = tooltip_for_available_mount(state, 9371)
+
+    assert_true(tooltip_contains(lines, "Right-click to add to Flying pool"),
+        "the black crystal should offer the flying pool")
+    assert_true(not tooltip_contains(lines, "Ground-only mount"),
+        "the black crystal should not be flagged ground-only")
+end)
+
+run_test("aq40-only crystals are flagged ground-only in their tooltip", function()
+    local state = setup_env({
+        num_companions_mode = "no_values",
+        bag_items = { 21321 },
+        item_spells = {
+            [21321] = { name = "Summon Red Qiraji Battle Tank", spellID = 9391 },
+        },
+        item_infos = {
+            [21321] = { name = "Red Qiraji Resonating Crystal", icon = "icon" },
+        },
+        db = {},
+        c_map_enabled = false,
+    })
+
+    SlashCmdList["ONEBUTTONMOUNT"]("")
+    local lines = tooltip_for_available_mount(state, 9391)
+
+    assert_true(tooltip_contains(lines, "Ground-only mount"), "the crystal should be flagged ground-only")
+    assert_true(not tooltip_contains(lines, "Right-click to add to Flying pool"),
+        "the crystal should not offer the flying pool")
 end)
 
 run_test("unknown companion mount type can still be added to flying rotation", function()

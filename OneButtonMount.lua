@@ -122,8 +122,14 @@ end
 -- class on TBC-era clients, so the bag scan cannot recognize them by item type.
 -- Listing them makes detection explicit and supplies mount data the client
 -- does not report for plain items. Every crystal is a ground mount.
+-- The black crystal is deliberately left unclassified. TBC-era clients report
+-- no mount type for anything else, so marking it ground-only would make it the
+-- single mount in the game that cannot be added to the flying rotation. It is a
+-- normal ground mount and behaves like every other one.
+-- The colored crystals only work inside AQ40, where flying is impossible, so
+-- marking those ground-only costs nothing and keeps them out of that rotation.
 local KNOWN_MOUNT_ITEM_IDS = {
-    [21176] = { isFlying = false }, -- Black Qiraji Resonating Crystal
+    [21176] = {},                   -- Black Qiraji Resonating Crystal
     [21218] = { isFlying = false }, -- Blue Qiraji Resonating Crystal
     [21321] = { isFlying = false }, -- Red Qiraji Resonating Crystal
     [21323] = { isFlying = false }, -- Green Qiraji Resonating Crystal
@@ -1065,6 +1071,17 @@ local function GetMountBySpellID(spellID)
         end
     end
     return nil
+end
+
+-- A mount the client positively reports as ground-only. Mounts whose type the
+-- client never reports stay unclassified and remain valid for either rotation,
+-- which on TBC-era clients is most of them.
+local function IsGroundOnlyMount(mount)
+    if not mount then
+        return false
+    end
+
+    return mount.canDetermineFlying and not mount.isFlying
 end
 
 local function IsInAQ40()
@@ -2099,7 +2116,13 @@ local function CreateMountIcon(parent, mountData, pool, index)
             GameTooltip:AddLine("Click to remove", 0.8, 0.2, 0.2)
         else
             GameTooltip:AddLine("Left-click to add to Ground pool", 0.2, 0.8, 0.2)
-            GameTooltip:AddLine("Right-click to add to Flying pool", 0.4, 0.6, 1.0)
+            -- Only offer the flying pool when the mount can actually go there,
+            -- so the tooltip never invites a click that gets refused.
+            if IsGroundOnlyMount(self.mountData) then
+                GameTooltip:AddLine("Ground-only mount", 0.7, 0.7, 0.7)
+            else
+                GameTooltip:AddLine("Right-click to add to Flying pool", 0.4, 0.6, 1.0)
+            end
         end
         GameTooltip:Show()
     end)
@@ -2127,8 +2150,9 @@ local function CreateMountIcon(parent, mountData, pool, index)
                     table.insert(characterDB.groundMounts, self.mountData.spellID)
                 end
             elseif button == "RightButton" then
-                if self.mountData.canDetermineFlying and not self.mountData.isFlying then
-                    Feedback((self.mountData.name or "This mount") .. " cannot be added to flying rotation.")
+                if IsGroundOnlyMount(self.mountData) then
+                    Feedback((self.mountData.name or "This mount")
+                        .. " is a ground-only mount, so it can only be added to the ground rotation.")
                     return
                 end
                 if not TableContains(characterDB.flyingMounts, self.mountData.spellID) then

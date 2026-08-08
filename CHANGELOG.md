@@ -4,7 +4,8 @@
 - Detected the Black Qiraji Resonating Crystal as a mount; TBC-era clients do not tag Qiraji crystals with the Miscellaneous/Mount item class, so the bag scan skipped them entirely
 - Treated the black crystal as usable everywhere rather than AQ40-only, since it is the one crystal that works outside the Temple of Ahn'Qiraj
 - Kept the black crystal eligible inside AQ40 alongside the colored crystals
-- Marked the Qiraji crystals as ground-only so they can no longer be added to the flying rotation
+- Marked the AQ40-only Qiraji crystals as ground-only so they can no longer be added to the flying rotation. The black crystal is deliberately left unclassified so it behaves like every other mount; TBC-era clients report no mount type for anything else, so classifying it would have made it the only mount in the game that could not be added to the flying rotation
+- Explained the ground-only refusal instead of just stating it, and stopped the available-mounts tooltip offering a flying-pool click that would be refused
 - Resolved item and spellbook APIs through `C_Item` and `C_SpellBook`, falling back to the bare globals for older clients. TBC Anniversary only defines `GetItemSpell`, `GetItemInfo`, `GetItemInfoInstant`, `GetItemSubClassInfo`, `UseItemByName`, `IsSpellKnown`, and `IsPlayerSpell` while the client's `loadDeprecationFallbacks` CVar is on; with it off the bag-item mount scan was skipped entirely and no item mount could be summoned
 - Wrapped rotation icons onto additional rows; past ten mounts in a rotation the extra icons were drawn on top of the first row and could not be seen or removed
 - Stopped a rotation that exactly fills its last row from reserving an empty row beneath it, which wasted vertical space and squeezed the available mounts list
