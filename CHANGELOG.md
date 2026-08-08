@@ -1,5 +1,7 @@
 ## [Unreleased]
 
+## [1.0.31] - 2026-08-08
+
 ### Fixed
 - Detected the Black Qiraji Resonating Crystal as a mount; TBC-era clients do not tag Qiraji crystals with the Miscellaneous/Mount item class, so the bag scan skipped them entirely
 - Treated the black crystal as usable everywhere rather than AQ40-only, since it is the one crystal that works outside the Temple of Ahn'Qiraj
