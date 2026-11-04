@@ -1,5 +1,20 @@
 ## [Unreleased]
 
+### Fixed
+- Stopped "Crusader Aura on Mount" from raising `ADDON_ACTION_FORBIDDEN` ("tried to call the protected function") when a paladin leaves their mount by any means other than the mount key, such as a flight path, getting dazed, or casting while mounted. The addon tried to cast the previous aura back from an event handler, and WoW blocks that at all times, not just in combat. Cancelling a mount cast and right-clicking the minimap button ran into the same block
+- Kept the previous aura saved through those dismounts so the next dismount with the mount key still restores it. The blocked restore used to discard it, which left Crusader Aura on for good
+- Re-saved the active aura on every mount key press while Crusader Aura is off, so switching auras between mounts restores the new aura instead of an older one
+- Stopped the mount key from restoring the saved aura when Crusader Aura is already off at dismount, so an aura picked while mounted is left alone
+- Stopped right-clicking the minimap button from raising the same error when it picked a class mount (Summon Warhorse, Charger, Felsteed, Dreadsteed, or Flight Form) or a mount used from the bags (Qiraji crystals, brooms). A click is not allowed to cast spells or use items, so those mounts were never summoned from the minimap
+
+### Changed
+- Right-clicking the minimap button now picks only from mounts in your collection. If the rotation has nothing but class and bag mounts, it says those need the mount key instead of trying to summon one
+- Right-clicking the minimap button no longer switches to Crusader Aura or restores the previous aura. Only the mount key is allowed to cast, so all aura handling now goes through it
+- Stopped listening to `UNIT_AURA` and `UNIT_SPELLCAST_INTERRUPTED`; they were only there for the blocked restore
+
+### Added
+- Regression coverage that fails any test in which addon code calls `CastSpellByName`, `CastSpellByID`, or `UseItemByName` directly, since the live client forbids those outside a secure button. Dedicated tests cover off-key dismounts, cancelled mount casts, minimap dismounts, and minimap summons
+
 ## [1.0.31] - 2026-08-08
 
 ### Fixed
