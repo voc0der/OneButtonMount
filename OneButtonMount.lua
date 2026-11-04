@@ -143,9 +143,10 @@ local KNOWN_MOUNT_ITEM_IDS = {
 local configFrame = nil
 local minimapButton = nil
 local allMounts = {}        -- { spellID, name, icon, isFlying, canDetermineFlying, index, journalID }
+-- The paladin aura to put back once Crusader Aura is no longer needed. Casting
+-- is protected, so only a press of the mount key can restore it. The aura stays
+-- saved through any other kind of dismount until that key dismounts.
 local savedAuraBeforeMount = nil
-local wasMountedState = false
-local mountingInProgress = false
 
 -- ============================================================================
 -- Client API Compatibility
@@ -211,19 +212,6 @@ end
 
 local function APIHasItemSubClassInfo()
     return (C_Item and C_Item.GetItemSubClassInfo) or GetItemSubClassInfo
-end
-
-local function APIUseItemByName(itemID)
-    if C_Item and C_Item.UseItemByName then
-        return C_Item.UseItemByName(itemID)
-    elseif UseItemByName then
-        return UseItemByName(itemID)
-    end
-    return nil
-end
-
-local function APIHasUseItemByName()
-    return (C_Item and C_Item.UseItemByName) or UseItemByName
 end
 
 -- Blizzard's own shim maps the two spellbook globals onto C_SpellBook with the
@@ -1562,8 +1550,14 @@ local function GetCrusaderAuraName()
     return (GetSpellInfo and GetSpellInfo(CRUSADER_AURA_SPELL_ID)) or "Crusader Aura"
 end
 
+-- Keeps the saved aura current when the paladin switches auras between mounts.
+-- When no other aura reads as active (none chosen, or a switch still settling),
+-- the existing saved aura is kept.
 local function SaveCurrentAura()
-    savedAuraBeforeMount = GetActiveNonCrusaderAuraName()
+    local auraName = GetActiveNonCrusaderAuraName()
+    if auraName then
+        savedAuraBeforeMount = auraName
+    end
 end
 
 local function ClearSavedAura()
@@ -1663,6 +1657,28 @@ local function SelectMountFromPool(pool)
     return spellID, GetMountBySpellID(spellID)
 end
 
+-- The minimap button's right-click runs as ordinary addon code, where WoW
+-- forbids casting a spell or using an item. Mounts from the mount collection are
+-- summoned through their own API and still work; class mounts and mounts used
+-- from bags need the mount key's secure macro.
+local function CanSummonFromClick(mount)
+    if not mount then
+        return false
+    end
+    if mount.journalID and C_MountJournal and C_MountJournal.SummonByID then
+        return true
+    end
+    return mount.index ~= nil and CallCompanion ~= nil
+end
+
+local function GetMountKeyOnlyMessage()
+    local key = GetCharacterDB().keybind
+    if key then
+        return "Only your mount key (" .. key .. ") can summon class mounts and mounts from your bags."
+    end
+    return "Class mounts and mounts from your bags need a mount key. Set one with /obm."
+end
+
 local function SummonRandomMount()
     if InCombatLockdown() then
         Feedback("Cannot mount in combat.")
@@ -1670,15 +1686,9 @@ local function SummonRandomMount()
     end
 
     if IsMounted() then
-        local auraToRestore = nil
-        if ShouldUseCrusaderAura() and savedAuraBeforeMount then
-            auraToRestore = savedAuraBeforeMount
-        end
-        ClearSavedAura()
+        -- Casting the saved aura back is forbidden here, so it is left for the
+        -- mount key's next dismount.
         Dismount()
-        if auraToRestore and CastSpellByName then
-            CastSpellByName(auraToRestore)
-        end
         return
     end
 
@@ -1697,62 +1707,24 @@ local function SummonRandomMount()
         return
     end
 
-    local spellID, mount = SelectMountFromPool(pool)
-    -- Spell-only mounts (Paladin/Warlock class mounts) are on the combat GCD;
-    -- companion, journal, and item mounts bypass the GCD and can be called immediately.
-    local isSpellOnlyMount = not mount or (not mount.index and not mount.journalID and not mount.itemID)
-
-    if ShouldUseCrusaderAura() then
-        if not IsCrusaderAuraActive() then
-            if not savedAuraBeforeMount then
-                SaveCurrentAura()
-            end
-            if isSpellOnlyMount then
-                -- Class spell mount shares the GCD with CA: apply CA now, mount on the next press
-                if CastSpellByID then
-                    CastSpellByID(CRUSADER_AURA_SPELL_ID)
-                elseif CastSpellByName then
-                    CastSpellByName(GetCrusaderAuraName())
-                end
-                return
-            else
-                -- Companion/journal/item mount bypasses the GCD: apply CA then fall through to mount
-                if CastSpellByID then
-                    CastSpellByID(CRUSADER_AURA_SPELL_ID)
-                elseif CastSpellByName then
-                    CastSpellByName(GetCrusaderAuraName())
-                end
-            end
-        end
-        -- CA already active (or we just activated it for non-spell mounts): record aura for restore
-        if not savedAuraBeforeMount then
-            SaveCurrentAura()
+    local clickPool = {}
+    for _, spellID in ipairs(pool) do
+        if CanSummonFromClick(GetMountBySpellID(spellID)) then
+            table.insert(clickPool, spellID)
         end
     end
+    if #clickPool == 0 then
+        Feedback(GetMountKeyOnlyMessage())
+        return
+    end
 
-    mountingInProgress = true
-    if mount then
-        if mount.journalID and C_MountJournal and C_MountJournal.SummonByID then
-            C_MountJournal.SummonByID(mount.journalID)
-        elseif mount.index and CallCompanion then
-            CallCompanion("MOUNT", mount.index)
-        elseif mount.itemID and APIHasUseItemByName() then
-            APIUseItemByName(mount.itemID)
-        else
-            if CastSpellByID then
-                CastSpellByID(spellID)
-            elseif CastSpellByName then
-                local spellName = GetSpellInfo(spellID)
-                if spellName then
-                    CastSpellByName(spellName)
-                end
-            end
-        end
+    -- Crusader Aura is not switched on here either; only the mount key's
+    -- secure macro may cast it.
+    local _, mount = SelectMountFromPool(clickPool)
+    if mount.journalID and C_MountJournal and C_MountJournal.SummonByID then
+        C_MountJournal.SummonByID(mount.journalID)
     else
-        -- Mount may have been removed from companion list, try spell
-        if CastSpellByID then
-            CastSpellByID(spellID)
-        end
+        CallCompanion("MOUNT", mount.index)
     end
 end
 
@@ -1827,7 +1799,9 @@ bindingFrame:SetScript("PreClick", function(self, button)
 
     if IsMounted() then
         local auraToRestore = nil
-        if ShouldUseCrusaderAura() and savedAuraBeforeMount then
+        -- With Crusader Aura already off, the player picked their aura since the
+        -- save, so switching them back to the saved one would undo that choice.
+        if ShouldUseCrusaderAura() and savedAuraBeforeMount and IsCrusaderAuraActive() then
             auraToRestore = savedAuraBeforeMount
         end
         ClearSavedAura()
@@ -1864,29 +1838,20 @@ bindingFrame:SetScript("PreClick", function(self, button)
     -- companion, journal, and item mounts bypass the GCD and can be chained in one macro.
     local isSpellOnlyMount = not mount or (not mount.index and not mount.journalID and not mount.itemID)
 
-    if ShouldUseCrusaderAura() then
-        if not IsCrusaderAuraActive() then
-            if not savedAuraBeforeMount then
-                SaveCurrentAura()
-            end
-            if isSpellOnlyMount then
-                -- Class spell mount shares the GCD with CA: apply CA now, mount on the next press
-                self:SetAttribute("macrotext", "/cast " .. GetCrusaderAuraName())
-                return
-            else
-                -- Companion/journal/item mount bypasses the GCD: CA + mount in one macro
-                mountingInProgress = true
-                self:SetAttribute("macrotext", "/cast " .. GetCrusaderAuraName() .. "\n" .. mountLine)
-                return
-            end
+    -- Switch to Crusader Aura first, saving the current aura for the dismount.
+    -- If Crusader Aura is already on, the aura saved before it stays saved.
+    if ShouldUseCrusaderAura() and not IsCrusaderAuraActive() then
+        SaveCurrentAura()
+        if isSpellOnlyMount then
+            -- Class spell mount shares the GCD with CA: apply CA now, mount on the next press
+            self:SetAttribute("macrotext", "/cast " .. GetCrusaderAuraName())
+        else
+            -- Companion/journal/item mount bypasses the GCD: CA + mount in one macro
+            self:SetAttribute("macrotext", "/cast " .. GetCrusaderAuraName() .. "\n" .. mountLine)
         end
-        -- CA already active (or not needed this press): record aura for restore
-        if not savedAuraBeforeMount then
-            SaveCurrentAura()
-        end
+        return
     end
 
-    mountingInProgress = true
     self:SetAttribute("macrotext", mountLine)
 end)
 
@@ -2824,15 +2789,14 @@ local eventFrame = CreateFrame("Frame")
 eventFrame:RegisterEvent("ADDON_LOADED")
 eventFrame:RegisterEvent("PLAYER_ENTERING_WORLD")
 eventFrame:RegisterEvent("COMPANION_UPDATE")
-eventFrame:RegisterEvent("UNIT_AURA")
-eventFrame:RegisterEvent("UNIT_SPELLCAST_INTERRUPTED")
 
+-- Nothing here restores the saved paladin aura. Casting from an event handler is
+-- forbidden at all times, not only in combat, so only the mount key can do it.
 eventFrame:SetScript("OnEvent", function(self, event, arg1, ...)
     if event == "ADDON_LOADED" and arg1 == addonName then
         OneButtonMount:InitDB()
         ScanMounts()
         SanitizeSavedMountPools()
-        wasMountedState = IsMounted and IsMounted() or false
 
         -- Create minimap button
         if GetMinimapSettings().show then
@@ -2846,7 +2810,6 @@ eventFrame:SetScript("OnEvent", function(self, event, arg1, ...)
         -- Restore keybind after loading screens
         RestoreKeybind()
         ScanMounts()
-        wasMountedState = IsMounted and IsMounted() or false
 
     elseif event == "COMPANION_UPDATE" then
         ScanMounts()
@@ -2854,37 +2817,5 @@ eventFrame:SetScript("OnEvent", function(self, event, arg1, ...)
         if configFrame and configFrame:IsShown() then
             OneButtonMount:RefreshConfigUI()
         end
-
-    elseif event == "UNIT_AURA" and arg1 == "player" then
-        local nowMounted = IsMounted and IsMounted() or false
-        if not wasMountedState and nowMounted then
-            -- Just mounted: cast completed
-            mountingInProgress = false
-        elseif wasMountedState and not nowMounted then
-            -- Just dismounted
-            mountingInProgress = false
-            if savedAuraBeforeMount and ShouldUseCrusaderAura() and not InCombatLockdown() then
-                local auraName = savedAuraBeforeMount
-                ClearSavedAura()
-                if CastSpellByName then
-                    CastSpellByName(auraName)
-                end
-            else
-                ClearSavedAura()
-            end
-        end
-        wasMountedState = nowMounted
-
-    elseif event == "UNIT_SPELLCAST_INTERRUPTED" and arg1 == "player" then
-        if mountingInProgress and savedAuraBeforeMount and ShouldUseCrusaderAura() and not InCombatLockdown() then
-            local auraName = savedAuraBeforeMount
-            ClearSavedAura()
-            mountingInProgress = false
-            -- Casting the previous aura deactivates Crusader Aura automatically
-            if CastSpellByName then
-                CastSpellByName(auraName)
-            end
-        end
-        mountingInProgress = false
     end
 end)

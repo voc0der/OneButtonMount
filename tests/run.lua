@@ -24,6 +24,9 @@ local function copy_table(value)
     return out
 end
 
+-- Every environment the current test builds, so run_test can check them all.
+local created_states = {}
+
 local function setup_env(opts)
     opts = opts or {}
     local state = {
@@ -64,12 +67,14 @@ local function setup_env(opts)
         player_spells = opts.player_spells or {},
         is_spell_known_available = opts.is_spell_known_available ~= false,
         deprecation_fallbacks = opts.deprecation_fallbacks ~= false,
+        forbidden_calls = {},
         locale = opts.locale or "enUS",
         run_macro_text_available = opts.run_macro_text_available or false,
         player_class = opts.player_class or nil,
         shapeshift_forms = opts.shapeshift_forms or {},
         player_moving = opts.player_moving or false,
     }
+    created_states[#created_states + 1] = state
 
     _G.unpack = table.unpack
     _G.tinsert = table.insert
@@ -325,14 +330,23 @@ local function setup_env(opts)
     _G.CallCompanion = function(_, index)
         state.last_call_companion_index = index
     end
+    -- trigger_secure_mount runs the secure button's macro by parsing its text,
+    -- so any call that reaches these three mocks came straight from addon Lua.
+    -- The live client refuses that with ADDON_ACTION_FORBIDDEN, in or out of combat.
+    local function record_forbidden_call(name, arg)
+        state.forbidden_calls[#state.forbidden_calls + 1] = { name = name, arg = arg }
+    end
     _G.CastSpellByID = function(spell_id)
         state.last_cast_spell_id = spell_id
+        record_forbidden_call("CastSpellByID", spell_id)
     end
     _G.CastSpellByName = function(spell_name)
         state.last_cast_spell_name = spell_name
+        record_forbidden_call("CastSpellByName", spell_name)
     end
     _G.UseItemByName = function(item_id)
         state.last_used_item_id = item_id
+        record_forbidden_call("UseItemByName", item_id)
     end
     if state.run_macro_text_available then
         _G.RunMacroText = function(macro_text)
@@ -637,12 +651,33 @@ local function setup_env(opts)
     return state
 end
 
+local function describe_forbidden_call(state)
+    local call = state.forbidden_calls[1]
+    if not call then
+        return nil
+    end
+    return string.format("addon code called %s(%s) directly; the client blocks that with ADDON_ACTION_FORBIDDEN",
+        call.name, tostring(call.arg))
+end
+
 local failures = 0
 local total = 0
 
 local function run_test(name, fn)
     total = total + 1
+    created_states = {}
     local ok, err = pcall(fn)
+    -- Whatever a test checks, it also fails if the addon called a protected
+    -- function directly anywhere along the way.
+    if ok then
+        for _, state in ipairs(created_states) do
+            local problem = describe_forbidden_call(state)
+            if problem then
+                ok, err = false, problem
+                break
+            end
+        end
+    end
     if ok then
         print("PASS " .. name)
     else
@@ -723,6 +758,22 @@ local function trigger_secure_mount(state, button)
     end
 
     return macro_text
+end
+
+-- Delivers a game event to every frame registered for it, the way the client would.
+local function fire_event(state, event, ...)
+    for _, frame in ipairs(state.frames) do
+        if frame.events[event] and frame.scripts["OnEvent"] then
+            frame.scripts["OnEvent"](frame, event, ...)
+        end
+    end
+end
+
+local function assert_no_forbidden_calls(state, message)
+    local problem = describe_forbidden_call(state)
+    if problem then
+        error(message .. " (" .. problem .. ")")
+    end
 end
 
 run_test("stale mount IDs are pruned before summoning", function()
@@ -1478,7 +1529,7 @@ run_test("aq40-only crystals stay out of the flying rotation", function()
     assert_true(found_message, "expected flying rotation rejection message")
 end)
 
-run_test("bag mounts are detected and summoned through C_Item when deprecation fallbacks are off", function()
+run_test("bag mounts are detected through C_Item when deprecation fallbacks are off", function()
     local state = setup_env({
         deprecation_fallbacks = false,
         num_companions_mode = "no_values",
@@ -1501,15 +1552,7 @@ run_test("bag mounts are detected and summoned through C_Item when deprecation f
     assert_equal(_G.UseItemByName, nil, "test setup should remove the deprecated UseItemByName global")
 
     trigger_secure_mount(state)
-    assert_equal(state.last_used_item_id, 21176, "bag scan should resolve items through C_Item")
-
-    -- Minimap right-click takes the non-secure summon path, which is the only
-    -- caller of UseItemByName.
-    local minimap_button = _G.OneButtonMountMinimapButton
-    assert_true(minimap_button ~= nil, "minimap button not created")
-    state.last_used_item_id = nil
-    minimap_button.scripts["OnClick"](minimap_button, "RightButton")
-    assert_equal(state.last_used_item_id, 21176, "summon should use C_Item.UseItemByName")
+    assert_equal(state.last_binding_macrotext, "/use item:21176", "bag scan should resolve items through C_Item")
 end)
 
 run_test("class mount spells resolve through C_SpellBook when deprecation fallbacks are off", function()
@@ -1975,12 +2018,8 @@ run_test("blood elf paladin class mounts resolve to learned spell IDs and remap 
 
     assert_true(found_warhorse, "blood elf paladin mount should appear with its learned spell ID")
 
-    local minimap_button = _G.OneButtonMountMinimapButton
-    assert_true(minimap_button ~= nil, "minimap button not created")
-
-    state.last_cast_spell_id = nil
-    minimap_button.scripts["OnClick"](minimap_button, "RightButton")
-    assert_equal(state.last_cast_spell_id, 34769, "direct summon path should cast the learned blood elf paladin spell ID")
+    trigger_secure_mount(state)
+    assert_equal(state.last_binding_macrotext, "/cast Summon Warhorse", "the mount key should cast the learned blood elf paladin mount")
 end)
 
 run_test("mount slash command is no longer supported", function()
@@ -2993,8 +3032,10 @@ run_test("no aura restoration when crusader aura feature is disabled on dismount
     assert_equal(state.last_binding_macrotext, "/dismount", "disabled feature should produce plain dismount")
 end)
 
-run_test("unit aura event restores saved aura when dismounted outside combat", function()
-    local state = setup_env({
+-- A paladin with Devotion Aura up, Summon Warhorse in the rotation, and
+-- "Crusader Aura on Mount" turned on.
+local function setup_paladin_class_mount()
+    return setup_env({
         mounts = {},  -- no companion mounts; class mount added via known_spells path
         known_spells = {
             [13819] = true,  -- Summon Warhorse
@@ -3004,6 +3045,7 @@ run_test("unit aura event restores saved aura when dismounted outside combat", f
             [13819] = { name = "Summon Warhorse", icon = "icon" },
             [32223] = { name = "Crusader Aura", icon = "crusader" },
             [465] = { name = "Devotion Aura", icon = "devotion" },
+            [7294] = { name = "Retribution Aura", icon = "retribution" },
         },
         player_class = { "Paladin", "PALADIN" },
         shapeshift_forms = {
@@ -3016,118 +3058,192 @@ run_test("unit aura event restores saved aura when dismounted outside combat", f
         },
         c_map_enabled = false,
     })
+end
 
-    -- Mount via keybind so savedAura is set
+-- The class mount shares the GCD with Crusader Aura, so the key takes two
+-- presses: the first switches auras, the second summons.
+local function mount_with_crusader_aura(state)
     trigger_secure_mount(state)
+    assert_equal(state.last_binding_macrotext, "/cast Crusader Aura", "first press should switch to Crusader Aura")
+    state.shapeshift_forms = { { spellID = 32223, isActive = true } }
 
-    -- Simulate mount happening (player is now mounted)
+    trigger_secure_mount(state)
+    assert_equal(state.last_binding_macrotext, "/cast Summon Warhorse", "second press should summon the mount")
+    state.mounted = true
+    fire_event(state, "UNIT_AURA", "player")
+end
+
+local function assert_key_dismount_restores(state, aura_name, message)
+    trigger_secure_mount(state)
+    assert_equal(state.last_binding_macrotext, "/dismount\n/cast " .. aura_name, message)
+    state.mounted = false
+end
+
+run_test("dismounting without the mount key never casts and keeps the saved aura", function()
+    local state = setup_paladin_class_mount()
+    mount_with_crusader_aura(state)
+
+    -- A flight path, a daze, or casting while mounted drops the player off the
+    -- mount without the key. This is the dismount from the ADDON_ACTION_FORBIDDEN report.
+    state.mounted = false
+    fire_event(state, "UNIT_AURA", "player")
+    assert_no_forbidden_calls(state, "an off-key dismount must not try to restore the aura from an event handler")
+
+    -- Crusader Aura is still on, so the next press goes straight to the mount
+    trigger_secure_mount(state)
+    assert_equal(state.last_binding_macrotext, "/cast Summon Warhorse", "with Crusader Aura still on the key should summon directly")
     state.mounted = true
 
-    -- Simulate wasMountedState update by firing UNIT_AURA while mounted
-    local event_frame
-    for _, frame in ipairs(state.frames) do
-        if frame.events["UNIT_AURA"] and frame.scripts["OnEvent"] then
-            event_frame = frame
-            break
-        end
-    end
-    assert_true(event_frame ~= nil, "event frame should be registered for UNIT_AURA")
-    event_frame.scripts["OnEvent"](event_frame, "UNIT_AURA", "player")
-
-    -- Simulate dismount (player is no longer mounted)
-    state.mounted = false
-    state.last_cast_spell_name = nil
-
-    -- Fire UNIT_AURA again to detect the dismount
-    event_frame.scripts["OnEvent"](event_frame, "UNIT_AURA", "player")
-
-    assert_equal(state.last_cast_spell_name, "Devotion Aura", "UNIT_AURA handler should restore the saved aura on dismount")
+    assert_key_dismount_restores(state, "Devotion Aura", "the next key dismount should restore the aura saved before the first mount")
+    assert_no_forbidden_calls(state, "the whole cycle should run through the secure button")
 end)
 
-run_test("minimap dismount restores saved aura", function()
-    local state = setup_env({
-        mounts = {},  -- no companion mounts; class mount added via known_spells path
-        known_spells = {
-            [13819] = true,  -- Summon Warhorse
-            [32223] = true,  -- Crusader Aura
-        },
-        spell_infos = {
-            [13819] = { name = "Summon Warhorse", icon = "icon" },
-            [32223] = { name = "Crusader Aura", icon = "crusader" },
-            [465] = { name = "Devotion Aura", icon = "devotion" },
-        },
-        player_class = { "Paladin", "PALADIN" },
-        shapeshift_forms = {
-            { spellID = 465, isActive = true },
-        },
-        char_db = {
-            groundMounts = { 13819 },
-            flyingMounts = {},
-            crusaderAura = true,
-        },
-        c_map_enabled = false,
-    })
+run_test("minimap dismount never casts and leaves the saved aura for the mount key", function()
+    local state = setup_paladin_class_mount()
+    mount_with_crusader_aura(state)
 
-    -- Mount via keybind to save the aura
+    local minimap_button = _G.OneButtonMountMinimapButton
+    assert_true(minimap_button ~= nil, "minimap button should exist")
+    minimap_button.scripts["OnClick"](minimap_button, "RightButton")
+    assert_true(state.dismounted, "minimap right-click should dismount")
+    assert_no_forbidden_calls(state, "minimap dismount must not cast the saved aura from a click handler")
+    state.mounted = false
+    fire_event(state, "UNIT_AURA", "player")
+
+    trigger_secure_mount(state)
+    assert_equal(state.last_binding_macrotext, "/cast Summon Warhorse", "with Crusader Aura still on the key should summon directly")
+    state.mounted = true
+
+    assert_key_dismount_restores(state, "Devotion Aura", "the next key dismount should restore the saved aura")
+end)
+
+run_test("cancelled mount cast never casts and keeps the saved aura", function()
+    local state = setup_paladin_class_mount()
+
+    -- Press 1 switches to Crusader Aura, press 2 starts the mount cast
+    trigger_secure_mount(state)
+    state.shapeshift_forms = { { spellID = 32223, isActive = true } }
     trigger_secure_mount(state)
 
-    -- Now simulate being mounted and dismounting via minimap
+    -- Moving or pressing Escape cancels the cast
+    fire_event(state, "UNIT_SPELLCAST_INTERRUPTED", "player")
+    assert_no_forbidden_calls(state, "a cancelled cast must not try to restore the aura from an event handler")
+
+    -- The next press retries the mount with Crusader Aura still on
+    trigger_secure_mount(state)
+    assert_equal(state.last_binding_macrotext, "/cast Summon Warhorse", "the retry should summon directly")
     state.mounted = true
-    state.last_cast_spell_name = nil
+
+    assert_key_dismount_restores(state, "Devotion Aura", "the key dismount should restore the aura saved before the cancelled cast")
+end)
+
+run_test("an aura chosen between mounts replaces the saved one", function()
+    local state = setup_paladin_class_mount()
+    mount_with_crusader_aura(state)
+
+    -- Dropped off the mount without the key, then the player picks Retribution Aura
+    state.mounted = false
+    fire_event(state, "UNIT_AURA", "player")
+    state.shapeshift_forms = { { spellID = 7294, isActive = true } }
+
+    mount_with_crusader_aura(state)
+    assert_key_dismount_restores(state, "Retribution Aura", "the key should restore the aura the player switched to, not the older saved one")
+end)
+
+run_test("key dismount leaves the aura alone once crusader aura is already off", function()
+    local state = setup_paladin_class_mount()
+    mount_with_crusader_aura(state)
+
+    -- Still mounted, the player switches to Retribution Aura themselves
+    state.shapeshift_forms = { { spellID = 7294, isActive = true } }
+
+    trigger_secure_mount(state)
+    assert_equal(state.last_binding_macrotext, "/dismount", "the key should not switch the player back to the older saved aura")
+end)
+
+run_test("minimap summon never casts crusader aura", function()
+    local state = setup_paladin_crusader_mount()
 
     local minimap_button = _G.OneButtonMountMinimapButton
     assert_true(minimap_button ~= nil, "minimap button should exist")
     minimap_button.scripts["OnClick"](minimap_button, "RightButton")
 
-    assert_true(state.dismounted, "minimap right-click should dismount")
-    assert_equal(state.last_cast_spell_name, "Devotion Aura", "minimap dismount should restore the saved aura")
+    assert_equal(state.last_call_companion_index, 1, "minimap right-click should still summon the companion mount")
+    assert_no_forbidden_calls(state, "minimap summon must not cast Crusader Aura from a click handler")
 end)
 
-run_test("cancelling mount cast restores previous aura via UNIT_SPELLCAST_INTERRUPTED", function()
-    local state = setup_env({
-        mounts = {},  -- no companion mounts; class mount added via known_spells path
+-- A rotation mixing a paladin class mount, the Black Qiraji crystal from the
+-- bags, and (unless left out) a mount from the collection.
+local function setup_mixed_mount_rotation(opts)
+    opts = opts or {}
+    local mounts = {}
+    local ground_mounts = { 23214, 9361 }
+    if opts.with_collection_mount ~= false then
+        mounts = { { spellID = 1001, name = "Brown Horse", mountType = 0x01 } }
+        ground_mounts[#ground_mounts + 1] = 1001
+    end
+
+    return setup_env({
+        mounts = mounts,
         known_spells = {
-            [13819] = true,  -- Summon Warhorse
-            [32223] = true,  -- Crusader Aura
+            [23214] = true,  -- Summon Charger
         },
         spell_infos = {
-            [13819] = { name = "Summon Warhorse", icon = "icon" },
-            [32223] = { name = "Crusader Aura", icon = "crusader" },
-            [465] = { name = "Devotion Aura", icon = "devotion" },
+            [23214] = { name = "Summon Charger", icon = "charger" },
         },
-        player_class = { "Paladin", "PALADIN" },
-        shapeshift_forms = {
-            { spellID = 465, isActive = true },
+        bag_items = { 21176 },
+        item_spells = {
+            [21176] = { name = "Summon Black Qiraji Battle Tank", spellID = 9361 },
+        },
+        item_infos = {
+            [21176] = { name = "Black Qiraji Resonating Crystal", icon = "icon" },
         },
         char_db = {
-            groundMounts = { 13819 },
+            groundMounts = ground_mounts,
             flyingMounts = {},
-            crusaderAura = true,
+            keybind = opts.keybind,
         },
         c_map_enabled = false,
     })
+end
 
-    local event_frame
-    for _, frame in ipairs(state.frames) do
-        if frame.events["UNIT_SPELLCAST_INTERRUPTED"] and frame.scripts["OnEvent"] then
-            event_frame = frame
-            break
-        end
+local function right_click_minimap()
+    local minimap_button = _G.OneButtonMountMinimapButton
+    assert_true(minimap_button ~= nil, "minimap button should exist")
+    minimap_button.scripts["OnClick"](minimap_button, "RightButton")
+end
+
+run_test("minimap summon only picks mounts a click is allowed to summon", function()
+    local state = setup_mixed_mount_rotation()
+
+    -- The pick is random, so click often enough that a class or bag mount
+    -- would come up if it were still in the running.
+    for _ = 1, 20 do
+        state.last_call_companion_index = nil
+        right_click_minimap()
+        assert_equal(state.last_call_companion_index, 1, "every minimap summon should use the collection mount")
     end
-    assert_true(event_frame ~= nil, "event frame should be registered for UNIT_SPELLCAST_INTERRUPTED")
+    assert_no_forbidden_calls(state, "minimap summons must skip class and bag mounts")
+end)
 
-    -- Press 1: save Devotion Aura, switch to Crusader Aura
+run_test("minimap summon points to the mount key when only class and bag mounts are eligible", function()
+    local state = setup_mixed_mount_rotation({ with_collection_mount = false, keybind = "F" })
+
+    right_click_minimap()
+    assert_equal(state.last_call_companion_index, nil, "nothing should be summoned from the click")
+    assert_no_forbidden_calls(state, "class and bag mounts must not be summoned from a click")
+    assert_true(string.find(state.chat[#state.chat], "Only your mount key (F) can summon", 1, true) ~= nil,
+        "the message should name the bound mount key")
+
+    _G.OneButtonMountCharDB.keybind = nil
+    right_click_minimap()
+    assert_true(string.find(state.chat[#state.chat], "Set one with /obm.", 1, true) ~= nil,
+        "without a bound key the message should say how to set one")
+
+    -- The mount key itself still summons both kinds
     trigger_secure_mount(state)
-    state.shapeshift_forms = { { spellID = 32223, isActive = true } }
-
-    -- Press 2: mount cast begins (mountingInProgress = true)
-    trigger_secure_mount(state)
-
-    -- Player cancels mount cast (moves, Escape, etc.)
-    state.last_cast_spell_name = nil
-    event_frame.scripts["OnEvent"](event_frame, "UNIT_SPELLCAST_INTERRUPTED", "player")
-
-    assert_equal(state.last_cast_spell_name, "Devotion Aura", "cancelled mount should restore the previous aura")
+    assert_true(state.last_binding_macrotext == "/cast Summon Charger" or state.last_binding_macrotext == "/use item:21176",
+        "the mount key should still summon class and bag mounts")
 end)
 
 print(string.format("Ran %d tests, %d failures", total, failures))
