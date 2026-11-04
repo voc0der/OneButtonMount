@@ -1,5 +1,7 @@
 ## [Unreleased]
 
+## [1.0.32] - 2026-11-04
+
 ### Fixed
 - Stopped "Crusader Aura on Mount" from raising `ADDON_ACTION_FORBIDDEN` ("tried to call the protected function") when a paladin leaves their mount by any means other than the mount key, such as a flight path, getting dazed, or casting while mounted. The addon tried to cast the previous aura back from an event handler, and WoW blocks that at all times, not just in combat. Cancelling a mount cast and right-clicking the minimap button ran into the same block
 - Kept the previous aura saved through those dismounts so the next dismount with the mount key still restores it. The blocked restore used to discard it, which left Crusader Aura on for good
